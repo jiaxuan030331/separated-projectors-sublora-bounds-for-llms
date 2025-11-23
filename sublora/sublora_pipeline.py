@@ -105,6 +105,8 @@ Section("sublora", "LoRA and subspace Settings").params(
     linear_head_lora_r=Param(int, "", default=1),
     linear_head_enable_lora=Param(bool, "", default=False),
     intrinsic_dim=Param(int, "subspace intrinsic dimensionality", default=0),
+    allocation_mode=Param(str, "allocation mode: uniform, fixed, learned", default="uniform"),
+    allocation_ratio=Param(float, "ratio of d_B / (d_A + d_B) for fixed allocation", default=0.5),
 )
 
 Section("system", "system details").params(
@@ -149,6 +151,8 @@ class SubLoRA():
     @param("sublora.attention_linear_lora_r")
     @param("sublora.linear_head_lora_r")
     @param("sublora.linear_head_enable_lora")
+    @param("sublora.allocation_mode")
+    @param("sublora.allocation_ratio")
     @param("model.model_size")
     @param("model.model_name_or_path")
     @param("system.dtype")
@@ -157,7 +161,7 @@ class SubLoRA():
     def __init__(self, yaml_config, dataset, dataset_dir, block_size, batch_size, perturb_word_order_window_size, init_from, 
                  n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_rope, use_mistral_sliding_window, use_lora, 
                  lora_alpha, lora_dropout, intrinsic_dim, attention_linear_use_lora, attention_linear_lora_r, linear_head_lora_r,
-                 linear_head_enable_lora, model_size, model_name_or_path, dtype, eval_batch_size, best_checkpoint_path=None):
+                 linear_head_enable_lora, allocation_mode, allocation_ratio, model_size, model_name_or_path, dtype, eval_batch_size, best_checkpoint_path=None):
         
         ### Change lora config here to train without lora if the rank for both attention and head = 0 
         
@@ -196,12 +200,18 @@ class SubLoRA():
 
         yaml_config["n_layer"], yaml_config["n_head"], yaml_config["n_embd"]= n_layer, n_head, n_embd
         
+        allocation_config = {
+            'mode': allocation_mode,
+            'ratio': allocation_ratio
+        }
+
         self.model, self.iter_num, self.best_val_loss, self.model_args, self.nparams  = get_model(n_layer, n_head, n_embd, bias, dropout,
                                                                                     use_mergedlinear, apply_rope, use_mistral_sliding_window, 
                                                                                     use_lora, lora_alpha, lora_dropout, attention_linear_use_lora,
                                                                                     attention_linear_lora_r,linear_head_lora_r, linear_head_enable_lora,
                                                                                     intrinsic_dim, block_size, self.data_dir, self.out_dir, init_from,
-                                                                                    self.master_process, self.device, best_checkpoint_path)
+                                                                                    self.master_process, self.device, best_checkpoint_path,
+                                                                                    allocation_config=allocation_config)
 
         if self.wandb_log and self.master_process:
             wandb.log({"nparams": self.nparams})

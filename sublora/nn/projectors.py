@@ -14,6 +14,8 @@ from sublora.nn.linear_operator_base import (
 )
 
 import inspect
+import re
+import math
 
 import torch
 import torch.nn as nn
@@ -596,6 +598,7 @@ def create_intrinsic_model(
     intrinsic_dim=1000,
     seed=None,
     device=None,
+    allocation_config=None,
 ):
     if seed is None:
         raise ValueError(
@@ -603,22 +606,42 @@ def create_intrinsic_model(
         )
 
     net = None
+    
+    # Check if we should use StructuredIDModule
+    use_structured = allocation_config is not None and allocation_config.get('mode') in ['fixed', 'learned']
 
     if intrinsic_mode == "dense":
-        class DenseIDNet(IDModule):
-            def __init__(self, net, dimension=1000, seed=None, **_):
-                super().__init__(
-                    net, partial(LazyRandom, seed=seed), dimension=dimension
-                )
-        net = DenseIDNet(base_net, dimension=intrinsic_dim, seed=seed)
+        if use_structured:
+            net = StructuredIDModule(
+                base_net, 
+                partial(LazyRandom, seed=seed), 
+                dimension=intrinsic_dim,
+                allocation_config=allocation_config
+            )
+        else:
+            class DenseIDNet(IDModule):
+                def __init__(self, net, dimension=1000, seed=None, **_):
+                    super().__init__(
+                        net, partial(LazyRandom, seed=seed), dimension=dimension
+                    )
+            net = DenseIDNet(base_net, dimension=intrinsic_dim, seed=seed)
 
     elif intrinsic_mode == "sparse":
-        class SparseIDNet(IDModule):
-            def __init__(self, net, dimension=1000, seed=None, **_):
-                super().__init__(
-                    net, partial(SparseOperator, seed=seed), dimension=dimension
-                )
-        net = SparseIDNet(base_net, dimension=intrinsic_dim, seed=seed)
+        if use_structured:
+            net = StructuredIDModule(
+                base_net, 
+                partial(SparseOperator, seed=seed), 
+                dimension=intrinsic_dim,
+                allocation_config=allocation_config
+            )
+        else:
+            class SparseIDNet(IDModule):
+                def __init__(self, net, dimension=1000, seed=None, **_):
+                    super().__init__(
+                        net, partial(SparseOperator, seed=seed), dimension=dimension
+                    )
+            net = SparseIDNet(base_net, dimension=intrinsic_dim, seed=seed)
+
 
     elif intrinsic_mode == "fastfood":
         class FastfoodIDNet(IDModule):
@@ -702,3 +725,189 @@ def create_intrinsic_model(
             tmp["subspace_params"] = weights["module.subspace_params"]
             net.load_state_dict(tmp)
     return net
+
+
+class StructuredIDModule(nn.Module):
+    """
+    Structured Intrinsic Dimensionality Module.
+    Allows for asymmetric allocation of subspace dimensions to different parameter groups (e.g. A vs B matrices).
+    """
+    def __init__(self, net, projector_factory, dimension=1000, allocation_config=None):
+        super().__init__()
+        self.d = dimension
+        self.allocation_config = allocation_config or {}
+        self.mode = self.allocation_config.get('mode', 'uniform') # uniform, fixed, learned
+        self.ratio = self.allocation_config.get('ratio', 0.5) # for fixed, d_B / (d_A + d_B)
+        
+        self._forward_net = [net]
+        
+        # Extract parameters and remove from net
+        initnet = deepcopy(net)
+        for orig_name, orig_p in initnet.named_parameters():
+            if orig_p.requires_grad:
+                _delchainattr(net, orig_name)
+        
+        self.all_params = [(n, p) for n, p in initnet.named_parameters() if p.requires_grad]
+        
+        # Group parameters
+        self.param_groups = self._group_parameters(self.all_params)
+        
+        # Initialize subspace parameters as a SINGLE tensor for compatibility with quantize_model
+        self.subspace_params = nn.Parameter(torch.zeros(self.d))
+        
+        self.projectors = nn.ModuleDict()
+        self.gating_params = nn.ParameterDict() # For learned gating
+        
+        # Store parameter lists for reconstruction
+        self.params_A = [p for n, p in self.param_groups['A']['items']]
+        self.names_A = [n for n, p in self.param_groups['A']['items']]
+        self.params_B = [p for n, p in self.param_groups['B']['items']]
+        self.names_B = [n for n, p in self.param_groups['B']['items']]
+        
+        if self.mode == 'learned':
+            # Layer-wise learned gating
+            # We assume d is split equally among layers for the base allocation
+            
+            # First, identify layers
+            layers = set()
+            for name, _ in self.all_params:
+                match = re.search(r'\.h\.(\d+)\.', name)
+                if match:
+                    layers.add(int(match.group(1)))
+            
+            self.layers = sorted(list(layers))
+            num_layers = len(self.layers) if self.layers else 1
+            self.d_per_layer = self.d // num_layers
+            
+            # Create params for each layer
+            for layer_idx in self.layers:
+                layer_key = str(layer_idx)
+                
+                # Find params for this layer
+                layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
+                layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
+                layer_params_B = [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                
+                if not layer_params_A and not layer_params_B:
+                    continue
+
+                # Gating parameter for this layer
+                self.gating_params[layer_key] = nn.Parameter(torch.zeros(1)) 
+                
+                # Projectors
+                D_A = sum(p.numel() for p in layer_params_A)
+                D_B = sum(p.numel() for p in layer_params_B)
+                
+                if D_A > 0:
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, self.d_per_layer, layer_params_A, layer_names_A)
+                if D_B > 0:
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, self.d_per_layer, layer_params_B, layer_names_B)
+
+        else:
+            # Fixed Global Split
+            # ratio is d_B / d
+            self.d_B = int(self.d * self.ratio)
+            self.d_A = self.d - self.d_B
+            
+            D_A = sum(p.numel() for p in self.params_A)
+            D_B = sum(p.numel() for p in self.params_B)
+            
+            if D_A > 0 and self.d_A > 0:
+                self.projectors['A'] = projector_factory(D_A, self.d_A, self.params_A, self.names_A)
+            
+            if D_B > 0 and self.d_B > 0:
+                self.projectors['B'] = projector_factory(D_B, self.d_B, self.params_B, self.names_B)
+
+    def _group_parameters(self, all_params):
+        groups = {
+            'A': {'items': []},
+            'B': {'items': []},
+            'other': {'items': []}
+        }
+        
+        for n, p in all_params:
+            if 'lora_A' in n:
+                groups['A']['items'].append((n, p))
+            elif 'lora_B' in n:
+                groups['B']['items'].append((n, p))
+            else:
+                groups['other']['items'].append((n, p))
+        return groups
+
+    def forward(self, *args, **kwargs):
+        if self.mode == 'learned':
+            # Layer-wise learned gating with Soft Masking
+            for i, layer_idx in enumerate(self.layers):
+                layer_key = str(layer_idx)
+                
+                # Extract slice of subspace params for this layer
+                start_idx = i * self.d_per_layer
+                end_idx = start_idx + self.d_per_layer
+                alpha = self.subspace_params[start_idx:end_idx]
+                
+                gamma = torch.sigmoid(self.gating_params[layer_key])
+                
+                # Soft Masking
+                # Create a differentiable mask that splits alpha into A and B parts
+                # We want first gamma * d elements for B, rest for A (or vice versa)
+                # Proposal: d_B = floor(gamma * d)
+                # Let's give first part to B
+                
+                indices = torch.arange(self.d_per_layer, device=alpha.device)
+                # Sigmoid ramp centered at gamma * d
+                # Steepness factor C=10 for relatively sharp transition but differentiable
+                k = gamma * self.d_per_layer
+                mask = torch.sigmoid(10 * (k - indices))
+                
+                alpha_B = alpha * mask
+                alpha_A = alpha * (1 - mask)
+                
+                if f'{layer_key}_A' in self.projectors:
+                    flat_A = self.projectors[f'{layer_key}_A'] @ alpha_A
+                    # Need to find params for this layer again or store them better?
+                    # Storing them in __init__ would be better but for now let's filter
+                    layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
+                    layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
+                    self._set_params(flat_A, layer_names_A, layer_params_A)
+                
+                if f'{layer_key}_B' in self.projectors:
+                    flat_B = self.projectors[f'{layer_key}_B'] @ alpha_B
+                    layer_params_B = [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                    layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                    self._set_params(flat_B, layer_names_B, layer_params_B)
+                    
+        else:
+            # Fixed Global Split
+            # First d_A params for A, rest for B
+            if 'A' in self.projectors:
+                alpha_A = self.subspace_params[:self.d_A]
+                flat_A = self.projectors['A'] @ alpha_A
+                self._set_params(flat_A, self.names_A, self.params_A)
+                
+            if 'B' in self.projectors:
+                alpha_B = self.subspace_params[self.d_A:] # Rest is for B
+                flat_B = self.projectors['B'] @ alpha_B
+                self._set_params(flat_B, self.names_B, self.params_B)
+
+        return self._forward_net[0](*args, **kwargs)
+
+    def _set_params(self, flat_params, names, init_params):
+        unflattened = unflatten_like(flat_params, init_params)
+        for p_name, init, proj_param in zip(names, init_params, unflattened):
+            p = init + proj_param.view(*init.shape)
+            _setchainattr(self._forward_net[0], p_name, p)
+
+    def to(self, *args, **kwargs):
+        self._forward_net[0].to(*args, **kwargs)
+        # Move init params
+        for group in self.param_groups.values():
+            for i, (n, p) in enumerate(group['items']):
+                group['items'][i] = (n, p.to(*args, **kwargs))
+        # Update stored lists
+        self.params_A = [p for n, p in self.param_groups['A']['items']]
+        self.params_B = [p for n, p in self.param_groups['B']['items']]
+        return super().to(*args, **kwargs)
+    
+    def get_num_params(self, only_trainable=False):
+        return self._forward_net[0].get_num_params(only_trainable)

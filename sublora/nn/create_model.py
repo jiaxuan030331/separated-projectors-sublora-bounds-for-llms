@@ -10,7 +10,7 @@ from sublora.nn.projectors import create_intrinsic_model
 def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_rope, use_mistral_sliding_window, 
               use_lora, lora_alpha, lora_dropout, attention_linear_use_lora, attention_linear_lora_r,linear_head_lora_r, 
               linear_head_enable_lora, intrinsic_dim, block_size, data_dir, out_dir, init_from, master_process, device,
-              best_checkpoint_path):
+              best_checkpoint_path, allocation_config=None):
         iter_num = 0
         best_val_loss = 1e9
 
@@ -55,7 +55,7 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
                 if use_lora:
                     lora.mark_only_lora_as_trainable(model)
                 model = create_intrinsic_model(base_net=model, ckpt_path=None, intrinsic_mode="rdkronqr", intrinsic_dim=intrinsic_dim,
-                                               seed=137, device=device)
+                                               seed=137, device=device, allocation_config=allocation_config)
                 
             # crop down the model block size if desired, using model surgery
             if intrinsic_dim == 0:
@@ -102,7 +102,8 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
                                             intrinsic_mode="rdkronqr",
                                             intrinsic_dim=intrinsic_dim,
                                             seed=137,
-                                            device=device,)
+                                            device=device,
+                                            allocation_config=allocation_config)
 
             state_dict = checkpoint['raw_model']
             

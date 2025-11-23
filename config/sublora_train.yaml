@@ -41,3 +41,5 @@ sublora:
   linear_head_lora_r: 4
   linear_head_enable_lora: True
   intrinsic_dim: 50000
+  allocation_mode: uniform
+  allocation_ratio: 0.5
