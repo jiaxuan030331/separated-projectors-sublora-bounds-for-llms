@@ -672,14 +672,22 @@ def create_intrinsic_model(
         net = RoundedDoubleKronIDNet(base_net, dimension=intrinsic_dim, seed=seed)
 
     elif intrinsic_mode == "rdkronqr":
-        class RoundedDoubleKronQRIDNet(IDModule):
-            def __init__(self, net, dimension=1000, order=2, seed=None, **_):
-                super().__init__(
-                    net,
-                    partial(RoundedDoubleKronQR, order=order, seed=seed),
-                    dimension=dimension,
-                )
-        net = RoundedDoubleKronQRIDNet(base_net, dimension=intrinsic_dim, seed=seed)
+        if use_structured:
+            net = StructuredIDModule(
+                base_net, 
+                partial(RoundedDoubleKronQR, order=2, seed=seed), 
+                dimension=intrinsic_dim,
+                allocation_config=allocation_config
+            )
+        else:
+            class RoundedDoubleKronQRIDNet(IDModule):
+                def __init__(self, net, dimension=1000, order=2, seed=None, **_):
+                    super().__init__(
+                        net,
+                        partial(RoundedDoubleKronQR, order=order, seed=seed),
+                        dimension=dimension,
+                    )
+            net = RoundedDoubleKronQRIDNet(base_net, dimension=intrinsic_dim, seed=seed)
 
     elif intrinsic_mode == "film":
         class FiLMIDNet(IDModule):
@@ -749,13 +757,20 @@ class StructuredIDModule(nn.Module):
         
         self.all_params = [(n, p) for n, p in initnet.named_parameters() if p.requires_grad]
         
+        # Compatibility attributes
+        self.names = [n for n, p in self.all_params]
+        self.trainable_initparams = [p for n, p in self.all_params]
+        
         # Group parameters
         self.param_groups = self._group_parameters(self.all_params)
+        
+        # Merge 'other' into 'A' to ensure they are projected
+        self.param_groups['A']['items'].extend(self.param_groups['other']['items'])
         
         # Initialize subspace parameters as a SINGLE tensor for compatibility with quantize_model
         self.subspace_params = nn.Parameter(torch.zeros(self.d))
         
-        self.projectors = nn.ModuleDict()
+        self.projectors = {} # Not nn.ModuleDict because projectors are not Modules
         self.gating_params = nn.ParameterDict() # For learned gating
         
         # Store parameter lists for reconstruction
@@ -768,16 +783,22 @@ class StructuredIDModule(nn.Module):
             # Layer-wise learned gating
             # We assume d is split equally among layers for the base allocation
             
-            # First, identify layers
+            # First, identify layers and misc params
             layers = set()
+            misc_params_exist = False
+            
             for name, _ in self.all_params:
                 match = re.search(r'\.h\.(\d+)\.', name)
                 if match:
                     layers.add(int(match.group(1)))
+                else:
+                    misc_params_exist = True
             
             self.layers = sorted(list(layers))
-            num_layers = len(self.layers) if self.layers else 1
-            self.d_per_layer = self.d // num_layers
+            self.has_misc = misc_params_exist
+            
+            num_groups = len(self.layers) + (1 if self.has_misc else 0)
+            self.d_per_layer = self.d // num_groups if num_groups > 0 else self.d
             
             # Create params for each layer
             for layer_idx in self.layers:
@@ -796,6 +817,26 @@ class StructuredIDModule(nn.Module):
                 self.gating_params[layer_key] = nn.Parameter(torch.zeros(1)) 
                 
                 # Projectors
+                D_A = sum(p.numel() for p in layer_params_A)
+                D_B = sum(p.numel() for p in layer_params_B)
+                
+                if D_A > 0:
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, self.d_per_layer, layer_params_A, layer_names_A)
+                if D_B > 0:
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, self.d_per_layer, layer_params_B, layer_names_B)
+
+            # Create params for misc group
+            if self.has_misc:
+                layer_key = 'misc'
+                
+                # Find params NOT in any layer
+                layer_params_A = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                layer_names_A = [n for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                
+                self.gating_params[layer_key] = nn.Parameter(torch.zeros(1))
+                
                 D_A = sum(p.numel() for p in layer_params_A)
                 D_B = sum(p.numel() for p in layer_params_B)
                 
@@ -838,25 +879,11 @@ class StructuredIDModule(nn.Module):
     def forward(self, *args, **kwargs):
         if self.mode == 'learned':
             # Layer-wise learned gating with Soft Masking
-            for i, layer_idx in enumerate(self.layers):
-                layer_key = str(layer_idx)
-                
-                # Extract slice of subspace params for this layer
-                start_idx = i * self.d_per_layer
-                end_idx = start_idx + self.d_per_layer
-                alpha = self.subspace_params[start_idx:end_idx]
-                
-                gamma = torch.sigmoid(self.gating_params[layer_key])
-                
+            
+            # Helper to process a group
+            def process_group(layer_key, alpha, gamma):
                 # Soft Masking
-                # Create a differentiable mask that splits alpha into A and B parts
-                # We want first gamma * d elements for B, rest for A (or vice versa)
-                # Proposal: d_B = floor(gamma * d)
-                # Let's give first part to B
-                
                 indices = torch.arange(self.d_per_layer, device=alpha.device)
-                # Sigmoid ramp centered at gamma * d
-                # Steepness factor C=10 for relatively sharp transition but differentiable
                 k = gamma * self.d_per_layer
                 mask = torch.sigmoid(10 * (k - indices))
                 
@@ -865,17 +892,41 @@ class StructuredIDModule(nn.Module):
                 
                 if f'{layer_key}_A' in self.projectors:
                     flat_A = self.projectors[f'{layer_key}_A'] @ alpha_A
-                    # Need to find params for this layer again or store them better?
-                    # Storing them in __init__ would be better but for now let's filter
-                    layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
-                    layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
+                    if layer_key == 'misc':
+                        layer_params_A = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                        layer_names_A = [n for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                    else:
+                        layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_key}.' in n]
+                        layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_key}.' in n]
                     self._set_params(flat_A, layer_names_A, layer_params_A)
                 
                 if f'{layer_key}_B' in self.projectors:
                     flat_B = self.projectors[f'{layer_key}_B'] @ alpha_B
-                    layer_params_B = [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
-                    layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                    if layer_key == 'misc':
+                        layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                        layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                    else:
+                        layer_params_B = [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_key}.' in n]
+                        layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_key}.' in n]
                     self._set_params(flat_B, layer_names_B, layer_params_B)
+
+            # Process layers
+            for i, layer_idx in enumerate(self.layers):
+                layer_key = str(layer_idx)
+                start_idx = i * self.d_per_layer
+                end_idx = start_idx + self.d_per_layer
+                alpha = self.subspace_params[start_idx:end_idx]
+                gamma = torch.sigmoid(self.gating_params[layer_key])
+                process_group(layer_key, alpha, gamma)
+            
+            # Process misc
+            if self.has_misc:
+                layer_key = 'misc'
+                start_idx = len(self.layers) * self.d_per_layer
+                end_idx = start_idx + self.d_per_layer
+                alpha = self.subspace_params[start_idx:end_idx]
+                gamma = torch.sigmoid(self.gating_params[layer_key])
+                process_group(layer_key, alpha, gamma)
                     
         else:
             # Fixed Global Split
@@ -904,10 +955,55 @@ class StructuredIDModule(nn.Module):
         for group in self.param_groups.values():
             for i, (n, p) in enumerate(group['items']):
                 group['items'][i] = (n, p.to(*args, **kwargs))
+        
         # Update stored lists
         self.params_A = [p for n, p in self.param_groups['A']['items']]
         self.params_B = [p for n, p in self.param_groups['B']['items']]
+        
+        # Update compatibility list
+        self.trainable_initparams = [p.to(*args, **kwargs) for p in self.trainable_initparams]
+        
         return super().to(*args, **kwargs)
     
     def get_num_params(self, only_trainable=False):
-        return self._forward_net[0].get_num_params(only_trainable)
+        if only_trainable:
+            n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            return n_params
+        else:
+            n_params = sum(p.numel() for p in self.parameters())    
+            return n_params
+
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type, correct_bias, adam_epislon, no_decay_bias):
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        if not no_decay_bias:
+            optim_groups = [
+                {'params': [p for n, p in param_dict.items()], 'weight_decay': weight_decay},
+            ]
+            print("using all params")
+        else:
+            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+            optim_groups = [
+                {'params': decay_params, 'weight_decay': weight_decay},
+                {'params': nodecay_params, 'weight_decay': 0.0}
+            ]
+            num_decay_params = sum(p.numel() for p in decay_params)
+            num_nodecay_params = sum(p.numel() for p in nodecay_params)
+            print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+            print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        
+        # Create AdamW optimizer and use the fused version if it is available
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        # optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, correct_bias=correct_bias, eps=adam_epislon, **extra_args)
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, eps=adam_epislon, **extra_args)
+
+        print(f"using fused AdamW: {use_fused}")
+
+        return optimizer

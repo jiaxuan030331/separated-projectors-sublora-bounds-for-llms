@@ -11,6 +11,7 @@ This repository implements the paper "Non-Vacuous Generalization Bounds for Larg
 3. **SubLoRA compression**: Combination of LoRA and linear subspace training for strong nonlinear compression
 4. **Scalability**: Non-vacuous bounds for models up to 800M+ parameters
 5. **Generalization insights**: Larger models achieve better compression and bounds
+6. **Adaptive Subspace Allocation (New)**: Implements "Fixed Asymmetric" and "Learned Gating" strategies to optimize parameter allocation within the subspace (ICML 2025).
 
 ---
 
@@ -42,6 +43,7 @@ The main package containing all implementation logic.
   - `SparseOperator`: Sparse random projection
   - `QuantizingWrapper`: Wrapper for quantized model inference
   - `create_intrinsic_model()`: Factory function to create intrinsic dimensionality models
+  - **`StructuredIDModule`**: (New) Structured intrinsic dimensionality module supporting asymmetric allocation and learned gating.
 
 - **`linear_operator_base.py`**: Base classes for lazy linear operators
   - Abstract classes for memory-efficient matrix operations

@@ -186,7 +186,9 @@ dependencies:
       - swagger-spec-validator==3.0.3
       - sympy==1.12
       - terminado==0.17.1
+      - terminaltables==3.1.0
       - threadpoolctl==3.2.0
+      - tiktoken==0.7.0
       - tinycss2==1.2.1
       - tokenizers==0.13.3
       - tomli==2.0.1
