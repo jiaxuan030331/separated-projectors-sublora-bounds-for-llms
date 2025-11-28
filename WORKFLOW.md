@@ -118,7 +118,7 @@ All core components described in the proposal are functional and ready for exper
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/test_run \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
@@ -161,21 +161,21 @@ python experiments/analyze_results.py \
    
    **Option A: Full OpenWebText (54GB)**
    ```bash
-   python data/openwebtext/prepare.py
+   python data/prepare.py
    ```
    *Note: This requires ~70GB disk space and may be slow to download.*
 
    **Option B: Dummy Dataset (Fast Testing)**
    ```bash
-   python data/openwebtext/create_dummy_dataset.py
+   python data/create_dummy_dataset.py
    ```
    *Creates a small synthetic dataset (~250KB) for verifying the pipeline.*
 
    This creates:
-   - `data/openwebtext/train.bin`
-   - `data/openwebtext/val.bin`
-   - `data/openwebtext/eot_indices.npy` (for bounds)
-   - `data/openwebtext/doc_lengths.npy` (for bounds)
+   - `data/train.bin`
+   - `data/val.bin`
+   - `data/eot_indices.npy` (for bounds)
+   - `data/doc_lengths.npy` (for bounds)
 
    **For bounds evaluation**, you also need:
    - `eot_indices.npy`: End-of-text token positions
@@ -240,7 +240,7 @@ python experiments/analyze_results.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_uniform_seed42 \
     --login.wandb_run_name=d1000_uniform_s42 \
     --sublora.intrinsic_dim=1000 \
@@ -253,7 +253,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_uniform_seed123 \
     --login.wandb_run_name=d1000_uniform_s123 \
     --sublora.intrinsic_dim=1000 \
@@ -266,7 +266,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_uniform_seed999 \
     --login.wandb_run_name=d1000_uniform_s999 \
     --sublora.intrinsic_dim=1000 \
@@ -281,7 +281,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_bheavy_seed42 \
     --login.wandb_run_name=d1000_bheavy_s42 \
     --sublora.intrinsic_dim=1000 \
@@ -294,7 +294,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_bheavy_seed123 \
     --login.wandb_run_name=d1000_bheavy_s123 \
     --sublora.intrinsic_dim=1000 \
@@ -307,7 +307,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_bheavy_seed999 \
     --login.wandb_run_name=d1000_bheavy_s999 \
     --sublora.intrinsic_dim=1000 \
@@ -322,7 +322,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_equal_seed42 \
     --login.wandb_run_name=d1000_equal_s42 \
     --sublora.intrinsic_dim=1000 \
@@ -335,7 +335,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_equal_seed123 \
     --login.wandb_run_name=d1000_equal_s123 \
     --sublora.intrinsic_dim=1000 \
@@ -348,7 +348,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_equal_seed999 \
     --login.wandb_run_name=d1000_equal_s999 \
     --sublora.intrinsic_dim=1000 \
@@ -363,7 +363,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_aheavy_seed42 \
     --login.wandb_run_name=d1000_aheavy_s42 \
     --sublora.intrinsic_dim=1000 \
@@ -376,7 +376,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_aheavy_seed123 \
     --login.wandb_run_name=d1000_aheavy_s123 \
     --sublora.intrinsic_dim=1000 \
@@ -389,7 +389,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_fixed_aheavy_seed999 \
     --login.wandb_run_name=d1000_aheavy_s999 \
     --sublora.intrinsic_dim=1000 \
@@ -404,7 +404,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --login.wandb_run_name=d1000_learned_s42 \
     --sublora.intrinsic_dim=1000 \
@@ -417,7 +417,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed123 \
     --login.wandb_run_name=d1000_learned_s123 \
     --sublora.intrinsic_dim=1000 \
@@ -430,7 +430,7 @@ python experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed999 \
     --login.wandb_run_name=d1000_learned_s999 \
     --sublora.intrinsic_dim=1000 \
@@ -451,7 +451,7 @@ For faster training with multiple GPUs:
 # 2 GPUs
 torchrun --standalone --nproc_per_node=2 experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
@@ -466,12 +466,13 @@ torchrun --standalone --nproc_per_node=4 experiments/train.py \
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d2000_uniform_seed42 \
     --login.wandb_run_name=d2000_uniform_s42 \
     --sublora.intrinsic_dim=2000 \
     --sublora.allocation_mode=uniform \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42
 ```
 
 ### Multi-GPU Training (Recommended)
@@ -482,7 +483,7 @@ For faster training with multiple GPUs:
 # 2 GPUs
 torchrun --standalone --nproc_per_node=2 experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
@@ -516,11 +517,11 @@ After training, compute generalization bounds:
 ```bash
 python experiments/eval_bounds.py \
     --config-file=config/sublora_bounds.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --model.best_checkpoint_path=out/adaptive_experiments/d1000_uniform_seed42 \
     --bounds.bound_type=document_level \
-    --data.openwebtext_train_eot_indices_file=data/openwebtext/eot_indices.npy \
-    --data.empirical_document_length_distribution_file=data/openwebtext/doc_lengths.npy
+    --data.openwebtext_train_eot_indices_file=data/eot_indices.npy \
+    --data.empirical_document_length_distribution_file=data/doc_lengths.npy
 ```
 
 ### Batch Evaluation (All 30 Models)
@@ -529,10 +530,10 @@ Create a script `run_all_bounds.sh`:
 
 ```bash
 #!/bin/bash
-DATA_DIR="data/openwebtext"
+DATA_DIR="data"
 RESULTS_DIR="out/adaptive_experiments"
-EOT_FILE="data/openwebtext/eot_indices.npy"
-DOC_LENGTHS="data/openwebtext/doc_lengths.npy"
+EOT_FILE="data/eot_indices.npy"
+DOC_LENGTHS="data/doc_lengths.npy"
 
 # Loop through all checkpoint directories
 for checkpoint_dir in $RESULTS_DIR/*/; do
@@ -555,7 +556,7 @@ done
 ```bash
 python experiments/eval_bounds.py \
     --config-file=config/sublora_bounds.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --model.best_checkpoint_path=out/adaptive_experiments/d1000_learned_seed42 \
     --bounds.bound_type=sequence_level
 ```
@@ -655,7 +656,7 @@ Four subplots comparing all methods:
 | Parameter | Description | Default | Example Values |
 |-----------|-------------|---------|----------------|
 | `--config-file` | Path to YAML config | - | `config/sublora_train.yaml` |
-| `--data.dataset_dir` | Path to processed data | TOADD | `data/openwebtext` |
+| `--data.dataset_dir` | Path to processed data | TOADD | `data` |
 | `--login.out_dir` | Output directory | TOADD | `out/experiment1` |
 | `--login.wandb_log` | Enable W&B logging | True | `True`, `False` |
 | `--login.wandb_run_name` | W&B run name | training | `d1000_learned_s42` |
@@ -717,7 +718,7 @@ Four subplots comparing all methods:
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data/openwebtext \
+    --data.dataset_dir=data \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \

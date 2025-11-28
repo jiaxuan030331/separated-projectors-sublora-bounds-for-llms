@@ -100,12 +100,13 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        # Disabled for compatibility with newer GPUs (e.g., RTX 5090 sm_120) where pre-compiled kernels may not work
+        self.flash = False  # hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         self.use_mistral_sliding_window = config.use_mistral_sliding_window
         self.block_id = block_id
 
         if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            # print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
@@ -168,7 +169,9 @@ class CausalSelfAttention(nn.Module):
         else:
             # manual implementation of attention    
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(attention_mask == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            if attention_mask is not None:
+                att = att.masked_fill(attention_mask == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)

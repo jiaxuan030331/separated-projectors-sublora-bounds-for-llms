@@ -2,6 +2,7 @@
 import os
 import time
 import datetime
+import platform
 from contextlib import nullcontext
 import wandb
 import numpy as np
@@ -383,7 +384,8 @@ class SubLoRA():
                 # get loss as float. note: this is a CPU-GPU sync point
                 # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
                 lossf = loss.item() * gradient_accumulation_steps
-                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+                iters_per_sec = 1.0 / dt if dt > 0 else 0.0
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, {iters_per_sec:.2f} it/s")
             iter_num += 1
             local_iter_num += 1
 
@@ -458,6 +460,9 @@ class SubLoRA():
     def maybe_launch_ddp(self, gradient_accumulation_steps, backend, device): 
         self.device = device
         if self.ddp:
+            if platform.system() == 'Windows' and backend == 'nccl':
+                print("Windows detected. Switching backend from 'nccl' to 'gloo'.")
+                backend = 'gloo'
             init_process_group(backend=backend)
             self.ddp_rank = int(os.environ['RANK'])
             self.ddp_local_rank = int(os.environ['LOCAL_RANK'])
