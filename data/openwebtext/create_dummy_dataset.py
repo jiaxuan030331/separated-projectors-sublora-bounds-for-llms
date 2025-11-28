@@ -43,10 +43,19 @@ enc = tiktoken.get_encoding("gpt2")
 
 # Tokenize and create train data
 train_tokens = []
+doc_lengths = []
+eot_indices = []
+current_idx = 0
+
 for text in sample_texts:
     ids = enc.encode_ordinary(text)
     ids.append(enc.eot_token)  # Add end-of-text token (50256)
     train_tokens.extend(ids)
+    
+    doc_len = len(ids)
+    doc_lengths.append(doc_len)
+    current_idx += doc_len
+    eot_indices.append(current_idx - 1) # Index of the EOT token
 
 # Create validation set (10% of train)
 val_tokens = train_tokens[:len(train_tokens)//10]
@@ -67,6 +76,15 @@ val_arr = np.array(val_tokens, dtype=np.uint16)
 val_path = os.path.join(output_dir, 'val.bin')
 val_arr.tofile(val_path)
 
+# Save auxiliary files for bounds evaluation
+eot_indices_arr = np.array(eot_indices, dtype=np.int32) # or int64 depending on size
+eot_path = os.path.join(output_dir, 'eot_indices.npy')
+np.save(eot_path, eot_indices_arr)
+
+doc_lengths_arr = np.array(doc_lengths, dtype=np.int32)
+doc_len_path = os.path.join(output_dir, 'doc_lengths.npy')
+np.save(doc_len_path, doc_lengths_arr)
+
 # Verify files
 train_size_kb = os.path.getsize(train_path) / 1024
 val_size_kb = os.path.getsize(val_path) / 1024
@@ -76,6 +94,8 @@ print("SUCCESS! Dummy dataset created:")
 print("=" * 80)
 print(f"  train.bin: {len(train_tokens):,} tokens ({train_size_kb:.1f} KB)")
 print(f"  val.bin: {len(val_tokens):,} tokens ({val_size_kb:.1f} KB)")
+print(f"  eot_indices.npy: {len(eot_indices):,} entries")
+print(f"  doc_lengths.npy: {len(doc_lengths):,} entries")
 print(f"\nLocation: {output_dir}")
 print("\n" + "=" * 80)
 print("TO USE THIS DATASET:")

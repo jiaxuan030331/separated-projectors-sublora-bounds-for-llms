@@ -158,13 +158,24 @@ python experiments/analyze_results.py \
    ```
 
 2. **Data Preparation**:
+   
+   **Option A: Full OpenWebText (54GB)**
    ```bash
    python data/openwebtext/prepare.py
    ```
+   *Note: This requires ~70GB disk space and may be slow to download.*
+
+   **Option B: Dummy Dataset (Fast Testing)**
+   ```bash
+   python data/openwebtext/create_dummy_dataset.py
+   ```
+   *Creates a small synthetic dataset (~250KB) for verifying the pipeline.*
 
    This creates:
-   - `data/openwebtext/train.bin` (~17GB, ~9B tokens)
-   - `data/openwebtext/val.bin` (~8.5MB, ~4M tokens)
+   - `data/openwebtext/train.bin`
+   - `data/openwebtext/val.bin`
+   - `data/openwebtext/eot_indices.npy` (for bounds)
+   - `data/openwebtext/doc_lengths.npy` (for bounds)
 
    **For bounds evaluation**, you also need:
    - `eot_indices.npy`: End-of-text token positions
