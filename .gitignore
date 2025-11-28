@@ -40,3 +40,5 @@ wandb/*
 
 train.bin
 val.bin
+doc_lengths.npy
+eot_indices.npy

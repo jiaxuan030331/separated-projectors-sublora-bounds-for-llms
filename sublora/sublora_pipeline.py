@@ -114,6 +114,7 @@ Section("system", "system details").params(
     dtype=Param(str, "'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler",
                 default='bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'),
     compile=Param(bool, "use PyTorch 2.0 to compile the model to be faster", default=True), 
+    seed=Param(int, "random seed", default=1337),
 )
 
 Section("bounds", "bound computation details").params(
@@ -158,10 +159,11 @@ class SubLoRA():
     @param("system.dtype")
     @param("bounds.eval_batch_size")
     @param("model.best_checkpoint_path")
+    @param("system.seed")
     def __init__(self, yaml_config, dataset, dataset_dir, block_size, batch_size, perturb_word_order_window_size, init_from, 
                  n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_rope, use_mistral_sliding_window, use_lora, 
                  lora_alpha, lora_dropout, intrinsic_dim, attention_linear_use_lora, attention_linear_lora_r, linear_head_lora_r,
-                 linear_head_enable_lora, allocation_mode, allocation_ratio, model_size, model_name_or_path, dtype, eval_batch_size, best_checkpoint_path=None):
+                 linear_head_enable_lora, allocation_mode, allocation_ratio, model_size, model_name_or_path, dtype, eval_batch_size, seed, best_checkpoint_path=None):
         
         ### Change lora config here to train without lora if the rank for both attention and head = 0 
         
@@ -176,6 +178,7 @@ class SubLoRA():
             yaml_config["use_lora"] = use_lora
         
         self.yaml_config = yaml_config
+        self.seed = seed
         self.block_size = block_size
         self.batch_size = batch_size
         self.perturb_word_order_window_size = perturb_word_order_window_size
@@ -283,7 +286,7 @@ class SubLoRA():
                 print(n)
         print("\n# === final trainable parameters === #\n")
 
-        torch.manual_seed(1337 + self.seed_offset)
+        torch.manual_seed(self.seed + self.seed_offset)
         # training loop
         X, Y, ix = get_batch('train', self.train_data, self.val_data, self.batch_size, self.block_size,
                                      self.device_type, self.device, self.perturb_word_order_window_size)
@@ -441,7 +444,7 @@ class SubLoRA():
 
         if self.master_process and self.yaml_config["action"] == "train":
             os.makedirs(self.out_dir, exist_ok=True)
-        torch.manual_seed(137)
+        torch.manual_seed(self.seed)
         torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
         torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
         self.device_type = 'cuda' if 'cuda' in self.device else 'cpu' # for later use in torch.autocast

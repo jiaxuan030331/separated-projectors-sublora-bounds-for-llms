@@ -245,7 +245,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_uniform_s42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42
 ```
 
 **Seed 123**:
@@ -257,7 +258,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_uniform_s123 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123
 ```
 
 **Seed 999**:
@@ -269,7 +271,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_uniform_s999 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999
 ```
 
 #### 2. Fixed B-heavy (ratio=0.8) - 3 seeds
@@ -283,7 +286,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_bheavy_s42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.8
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=42
 ```
 
 **Seed 123**:
@@ -295,7 +299,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_bheavy_s123 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.8
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=123
 ```
 
 **Seed 999**:
@@ -307,7 +312,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_bheavy_s999 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.8
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=999
 ```
 
 #### 3. Fixed Equal (ratio=0.5) - 3 seeds
@@ -321,7 +327,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_equal_s42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42
 ```
 
 **Seed 123**:
@@ -333,7 +340,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_equal_s123 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123
 ```
 
 **Seed 999**:
@@ -345,7 +353,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_equal_s999 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999
 ```
 
 #### 4. Fixed A-heavy (ratio=0.2) - 3 seeds
@@ -359,7 +368,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_aheavy_s42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.2
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=42
 ```
 
 **Seed 123**:
@@ -371,7 +381,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_aheavy_s123 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.2
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=123
 ```
 
 **Seed 999**:
@@ -383,7 +394,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_aheavy_s999 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
-    --sublora.allocation_ratio=0.2
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=999
 ```
 
 #### 5. Learned Gating (Adaptive) - 3 seeds
@@ -397,7 +409,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_learned_s42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42
 ```
 
 **Seed 123**:
@@ -409,7 +422,8 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_learned_s123 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123
 ```
 
 **Seed 999**:
@@ -421,14 +435,32 @@ python experiments/train.py \
     --login.wandb_run_name=d1000_learned_s999 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --sublora.allocation_ratio=0.5
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999
 ```
 
 ### Budget d=2000 (15 runs)
 
-#### 6-10. Same configurations with d=2000
+#### 1-10. Same configurations with d=2000
 
-Replace `--sublora.intrinsic_dim=1000` with `--sublora.intrinsic_dim=2000` and adjust output directories and run names accordingly.
+### Multi-GPU Training (Recommended)
+
+For faster training with multiple GPUs:
+
+```bash
+# 2 GPUs
+torchrun --standalone --nproc_per_node=2 experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data/openwebtext \
+    --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
+    --sublora.intrinsic_dim=1000 \
+    --sublora.allocation_mode=learned \
+    --system.seed=42
+
+# 4 GPUs
+torchrun --standalone --nproc_per_node=4 experiments/train.py \
+    [same arguments as above]
+```
 
 **Example for d=2000 Uniform, Seed 42**:
 ```bash
@@ -453,7 +485,8 @@ torchrun --standalone --nproc_per_node=2 experiments/train.py \
     --data.dataset_dir=data/openwebtext \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
-    --sublora.allocation_mode=learned
+    --sublora.allocation_mode=learned \
+    --sublora.
 
 # 4 GPUs
 torchrun --standalone --nproc_per_node=4 experiments/train.py \
@@ -626,6 +659,7 @@ Four subplots comparing all methods:
 | `--login.out_dir` | Output directory | TOADD | `out/experiment1` |
 | `--login.wandb_log` | Enable W&B logging | True | `True`, `False` |
 | `--login.wandb_run_name` | W&B run name | training | `d1000_learned_s42` |
+| `--system.seed` | Random seed | 1337 | `42`, `123`, `999` |
 
 ### SubLoRA Allocation Parameters
 
