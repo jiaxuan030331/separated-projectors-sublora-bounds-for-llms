@@ -69,67 +69,74 @@ def prepare_manual_dataset(data_dir):
     
     # Load text files into a dataset
     print("Loading files into dataset...")
-    # Passing 8 million file paths directly to load_dataset can cause issues on Windows
-    # Instead, we'll point it to the directory and let it find the files, or use a generator
     
-    # Option 1: Point to the directory (simpler, but might hit the same issue if it expands internally)
-    # dataset = load_dataset("text", data_dir=data_dir, sample_by="line")
+    # Since datasets library is failing on Windows with LocalFileSystem caching issues,
+    # we will implement a simple custom dataset class that mimics the behavior we need.
+    # This bypasses the datasets library for the loading/splitting phase entirely.
     
-    # Option 2: Use a generator (most robust for 8M files)
-    def gen():
-        for file_path in txt_files:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
-                if text.strip(): # Skip empty files
-                    yield {'text': text}
-
-    from datasets import Dataset
-    dataset = Dataset.from_generator(gen)
+    import random
+    random.seed(2357)
     
-    # The dataset returned by from_generator is not a DatasetDict, so we wrap it or split it directly
-    # It returns a Dataset object which corresponds to the 'train' split usually
+    # Shuffle the file list directly
+    random.shuffle(txt_files)
     
-    # Create train/val split
-    print("Creating train/val split...")
-    split_dataset = dataset.train_test_split(test_size=0.0005, seed=2357, shuffle=True)
-    split_dataset['val'] = split_dataset.pop('test')
-
+    # Calculate split index
+    split_idx = int(len(txt_files) * (1 - 0.0005))
+    train_files = txt_files[:split_idx]
+    val_files = txt_files[split_idx:]
+    
+    print(f"Train files: {len(train_files)}")
+    print(f"Val files: {len(val_files)}")
+    
     # Tokenize
     print("Initializing tokenizer...")
     enc = tiktoken.get_encoding("gpt2")
+    eot_token = enc.eot_token
 
-    def process(example):
-        ids = enc.encode_ordinary(example['text'])
-        ids.append(enc.eot_token)
-        out = {'ids': ids, 'len': len(ids)}
-        return out
-
-    print("Tokenizing...")
-    tokenized = split_dataset.map(
-        process,
-        remove_columns=['text'],
-        desc="Tokenizing",
-        num_proc=1, # Single process for Windows safety
-    )
-
-    # Save to binary files
-    print("Saving binary files...")
-    for split, dset in tokenized.items():
-        arr_len = np.sum(dset['len'], dtype=np.uint64)
-        filename = os.path.join(OUTPUT_DIR, f'{split}.bin')
-        dtype = np.uint16
+    def process_files_to_bin(files, split_name):
+        arr_len = 0
+        # First pass: calculate total length (optional, but good for progress bar)
+        # Actually, for speed, let's just write to a temporary list or file and then memmap
+        # Or better: write directly to a binary file using standard file I/O, then convert to memmap if needed
+        # But to match the original format, we need a single contiguous binary file.
         
-        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
-        total_batches = 1024 if arr_len > 1024 else 1
+        # Let's use a dynamic approach: write chunks to disk, then merge? 
+        # Or just iterate and write to a growing file.
+        
+        filename = os.path.join(OUTPUT_DIR, f'{split_name}.bin')
+        print(f"Processing {split_name} split to {filename}...")
+        
+        # We'll write directly to the file as uint16
+        # This is much more memory efficient than building a huge list
+        token_count = 0
+        
+        with open(filename, 'wb') as f:
+            for file_path in tqdm(files, desc=f"Tokenizing {split_name}"):
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as txt_f:
+                        text = txt_f.read()
+                        if not text.strip(): continue
+                        
+                        ids = enc.encode_ordinary(text)
+                        ids.append(eot_token)
+                        
+                        # Convert to uint16 and write bytes
+                        # Ensure we don't exceed uint16 range (GPT2 vocab is ~50k, so it fits)
+                        arr = np.array(ids, dtype=np.uint16)
+                        f.write(arr.tobytes())
+                        token_count += len(ids)
+                except Exception as e:
+                    print(f"Error processing {file_path}: {e}")
+                    
+        print(f"Saved {filename} with {token_count} tokens.")
+        return token_count
 
-        idx = 0
-        for batch_idx in tqdm(range(total_batches), desc=f'Writing {filename}'):
-            batch = dset.shard(num_shards=total_batches, index=batch_idx, contiguous=True).with_format('numpy')
-            arr_batch = np.concatenate(batch['ids'])
-            arr[idx : idx + len(arr_batch)] = arr_batch
-            idx += len(arr_batch)
-        arr.flush()
-        print(f"Saved {filename}")
+    # Process splits
+    process_files_to_bin(train_files, 'train')
+    process_files_to_bin(val_files, 'val')
+
+    # Also generate the auxiliary files needed for bounds evaluation
+    print("Generating auxiliary files for bounds evaluation...")
 
     # Also generate the auxiliary files needed for bounds evaluation
     print("Generating auxiliary files for bounds evaluation...")
