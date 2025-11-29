@@ -10,6 +10,31 @@ All components from the proposal are fully implemented and integrated.
 
 ---
 
+## Platform-Specific Notes
+
+### Required CLI Flags by Platform
+
+| Platform | GPU | Required Flags |
+|----------|-----|----------------|
+| Linux | A100/V100/etc (sm_70-sm_90) | None (defaults work) |
+| Linux | RTX 5090 (sm_120) | `--system.compile=False` |
+| Windows | Any GPU | `--system.compile=False` (recommended) |
+| Windows + RTX 50-series | RTX 5090 (sm_120) | `--system.compile=False` |
+
+### Quick Reference for Windows Users
+
+All Windows training commands should include:
+```powershell
+python experiments/train.py `
+    --config-file=config/sublora_train.yaml `
+    ... `
+    --system.compile=False
+```
+
+**Do NOT use** `torchrun` for single-GPU Windows setups—it adds unnecessary DDP overhead.
+
+---
+
 ## Table of Contents
 
 1. [Implementation Status](#implementation-status)
@@ -122,8 +147,11 @@ python experiments/train.py \
     --login.out_dir=out/test_run \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --training.max_iters=100
+    --training.max_iters=100 \
+    --system.compile=False
 ```
+
+> **Note for Windows/RTX 50-series users**: Add `--system.compile=False` as RTX 5090 (sm_120) is not yet supported by `torch.compile`. Flash Attention may also fall back to a slower implementation. See [Troubleshooting](#troubleshooting) for details.
 
 **Run All 30 Experiments**:
 ```bash
@@ -246,7 +274,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
 **Seed 123**:
@@ -259,7 +288,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=123
+    --system.seed=123 \
+    --system.compile=False
 ```
 
 **Seed 999**:
@@ -272,7 +302,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=999
+    --system.seed=999 \
+    --system.compile=False
 ```
 
 #### 2. Fixed B-heavy (ratio=0.8) - 3 seeds
@@ -287,7 +318,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
 **Seed 123**:
@@ -300,7 +332,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
-    --system.seed=123
+    --system.seed=123 \
+    --system.compile=False
 ```
 
 **Seed 999**:
@@ -313,7 +346,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
-    --system.seed=999
+    --system.seed=999 \
+    --system.compile=False
 ```
 
 #### 3. Fixed Equal (ratio=0.5) - 3 seeds
@@ -328,7 +362,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
 **Seed 123**:
@@ -341,7 +376,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=123
+    --system.seed=123 \
+    --system.compile=False
 ```
 
 **Seed 999**:
@@ -354,7 +390,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=999
+    --system.seed=999 \
+    --system.compile=False
 ```
 
 #### 4. Fixed A-heavy (ratio=0.2) - 3 seeds
@@ -369,7 +406,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
 **Seed 123**:
@@ -382,7 +420,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
-    --system.seed=123
+    --system.seed=123 \
+    --system.compile=False
 ```
 
 **Seed 999**:
@@ -395,7 +434,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
-    --system.seed=999
+    --system.seed=999 \
+    --system.compile=False
 ```
 
 #### 5. Learned Gating (Adaptive) - 3 seeds
@@ -410,7 +450,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
 **Seed 123**:
@@ -423,7 +464,8 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=123
+    --system.seed=123 \
+    --system.compile=False
 ```
 
 **Seed 999**:
@@ -436,33 +478,15 @@ python experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=999
+    --system.seed=999 \
+    --system.compile=False
 ```
 
 ### Budget d=2000 (15 runs)
 
-#### 1-10. Same configurations with d=2000
+#### 1. Baseline (Uniform) - 3 seeds
 
-### Multi-GPU Training (Recommended)
-
-For faster training with multiple GPUs:
-
-```bash
-# 2 GPUs
-torchrun --standalone --nproc_per_node=2 experiments/train.py \
-    --config-file=config/sublora_train.yaml \
-    --data.dataset_dir=data \
-    --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
-    --sublora.intrinsic_dim=1000 \
-    --sublora.allocation_mode=learned \
-    --system.seed=42
-
-# 4 GPUs
-torchrun --standalone --nproc_per_node=4 experiments/train.py \
-    [same arguments as above]
-```
-
-**Example for d=2000 Uniform, Seed 42**:
+**Seed 42**:
 ```bash
 python experiments/train.py \
     --config-file=config/sublora_train.yaml \
@@ -472,12 +496,217 @@ python experiments/train.py \
     --sublora.intrinsic_dim=2000 \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
-    --system.seed=42
+    --system.seed=42 \
+    --system.compile=False
 ```
 
-### Multi-GPU Training (Recommended)
+**Seed 123**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_uniform_seed123 \
+    --login.wandb_run_name=d2000_uniform_s123 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=uniform \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123 \
+    --system.compile=False
+```
 
-For faster training with multiple GPUs:
+**Seed 999**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_uniform_seed999 \
+    --login.wandb_run_name=d2000_uniform_s999 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=uniform \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999 \
+    --system.compile=False
+```
+
+#### 2. Fixed B-heavy (ratio=0.8) - 3 seeds
+
+**Seed 42**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_bheavy_seed42 \
+    --login.wandb_run_name=d2000_bheavy_s42 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=42 \
+    --system.compile=False
+```
+
+**Seed 123**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_bheavy_seed123 \
+    --login.wandb_run_name=d2000_bheavy_s123 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=123 \
+    --system.compile=False
+```
+
+**Seed 999**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_bheavy_seed999 \
+    --login.wandb_run_name=d2000_bheavy_s999 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.8 \
+    --system.seed=999 \
+    --system.compile=False
+```
+
+#### 3. Fixed Equal (ratio=0.5) - 3 seeds
+
+**Seed 42**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_equal_seed42 \
+    --login.wandb_run_name=d2000_equal_s42 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42 \
+    --system.compile=False
+```
+
+**Seed 123**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_equal_seed123 \
+    --login.wandb_run_name=d2000_equal_s123 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123 \
+    --system.compile=False
+```
+
+**Seed 999**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_equal_seed999 \
+    --login.wandb_run_name=d2000_equal_s999 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999 \
+    --system.compile=False
+```
+
+#### 4. Fixed A-heavy (ratio=0.2) - 3 seeds
+
+**Seed 42**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_aheavy_seed42 \
+    --login.wandb_run_name=d2000_aheavy_s42 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=42 \
+    --system.compile=False
+```
+
+**Seed 123**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_aheavy_seed123 \
+    --login.wandb_run_name=d2000_aheavy_s123 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=123 \
+    --system.compile=False
+```
+
+**Seed 999**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_fixed_aheavy_seed999 \
+    --login.wandb_run_name=d2000_aheavy_s999 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=fixed \
+    --sublora.allocation_ratio=0.2 \
+    --system.seed=999 \
+    --system.compile=False
+```
+
+#### 5. Learned Gating (Adaptive) - 3 seeds
+
+**Seed 42**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_learned_seed42 \
+    --login.wandb_run_name=d2000_learned_s42 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=learned \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=42 \
+    --system.compile=False
+```
+
+**Seed 123**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_learned_seed123 \
+    --login.wandb_run_name=d2000_learned_s123 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=learned \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=123 \
+    --system.compile=False
+```
+
+**Seed 999**:
+```bash
+python experiments/train.py \
+    --config-file=config/sublora_train.yaml \
+    --data.dataset_dir=data \
+    --login.out_dir=out/adaptive_experiments/d2000_learned_seed999 \
+    --login.wandb_run_name=d2000_learned_s999 \
+    --sublora.intrinsic_dim=2000 \
+    --sublora.allocation_mode=learned \
+    --sublora.allocation_ratio=0.5 \
+    --system.seed=999 \
+    --system.compile=False
+```
+
+### Multi-GPU Training (Linux with NCCL)
+
+For faster training with multiple GPUs on **Linux systems** with NCCL support:
 
 ```bash
 # 2 GPUs
@@ -487,12 +716,30 @@ torchrun --standalone --nproc_per_node=2 experiments/train.py \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --sublora.
+    --system.seed=42 \
+    --system.compile=False
 
 # 4 GPUs
 torchrun --standalone --nproc_per_node=4 experiments/train.py \
     [same arguments as above]
 ```
+
+### Windows Single-GPU Training
+
+On **Windows**, use direct Python invocation (no `torchrun`) to avoid DDP overhead:
+
+```powershell
+python experiments/train.py `
+    --config-file=config/sublora_train.yaml `
+    --data.dataset_dir=data `
+    --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 `
+    --sublora.intrinsic_dim=1000 `
+    --sublora.allocation_mode=learned `
+    --system.seed=42 `
+    --system.compile=False
+```
+
+> **Note**: On Windows, the distributed backend falls back to 'gloo' (NCCL is not available). For single-GPU setups, avoid `torchrun` to eliminate unnecessary DDP initialization overhead.
 
 ### Expected Training Outputs
 
@@ -660,7 +907,9 @@ Four subplots comparing all methods:
 | `--login.out_dir` | Output directory | TOADD | `out/experiment1` |
 | `--login.wandb_log` | Enable W&B logging | True | `True`, `False` |
 | `--login.wandb_run_name` | W&B run name | training | `d1000_learned_s42` |
-| `--system.seed` | Random seed | 1337 | `42`, `123`, `999` |
+| `--system.seed` | Random seed for reproducibility | 1337 | `42`, `123`, `999` |
+| `--system.compile` | Enable torch.compile (requires sm_90 or lower) | True | `True`, `False` |
+| `--system.dtype` | Data type for training | bfloat16 | `float32`, `float16`, `bfloat16` |
 
 ### SubLoRA Allocation Parameters
 
@@ -705,9 +954,35 @@ Four subplots comparing all methods:
 - Use smaller budget (`--sublora.intrinsic_dim=1000` instead of `2000`)
 
 #### Slow Training
-- Use multi-GPU training with `torchrun`
-- Enable PyTorch 2.0 compilation: `--system.compile=True`
+- Use multi-GPU training with `torchrun` (Linux only)
+- Enable PyTorch 2.0 compilation: `--system.compile=True` (requires supported GPU)
 - Use mixed precision: `--system.dtype=bfloat16`
+- Reduce gradient accumulation for testing: `--training.gradient_accumulation_steps=1`
+- Disable W&B logging: `--login.wandb_log=False`
+
+#### RTX 50-Series / sm_120 Compatibility Issues
+The RTX 5090 and other Blackwell GPUs (sm_120 architecture) are not yet fully supported by PyTorch. You may see errors like:
+```
+CUDA error: no kernel image is available for execution on the device
+sm_80 was not supported, you may need to rebuild with sm_90
+```
+
+**Solutions**:
+1. **Disable torch.compile**: Add `--system.compile=False` to all training commands
+2. **Flash Attention fallback**: The model will automatically fall back to a slower attention implementation. This is handled in `sublora/nn/model.py` by setting `self.flash = False`.
+3. **Wait for PyTorch update**: Future PyTorch releases with CUDA 12.6+ will add sm_120 support.
+
+#### Windows-Specific Issues
+
+**NCCL Not Available**:
+```
+RuntimeError: Distributed package doesn't have NCCL built in
+```
+**Solution**: The codebase automatically detects Windows and switches to the 'gloo' backend. No action needed.
+
+**Single-GPU DDP Overhead**:
+Using `torchrun --nproc_per_node=1` on a single GPU adds unnecessary overhead.
+**Solution**: Run directly with `python experiments/train.py` instead of `torchrun`.
 
 #### NaN Loss
 - Reduce learning rate
@@ -722,7 +997,8 @@ python experiments/train.py \
     --login.out_dir=out/adaptive_experiments/d1000_learned_seed42 \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
-    --model.init_from=resume
+    --model.init_from=resume \
+    --system.compile=False
 ```
 
 ### Bounds Evaluation Issues

@@ -342,6 +342,8 @@ class SubLoRA():
                             torch.save(checkpoint, os.path.join(self.out_dir, f'best_ckpt.pt'))
                         else:
                             torch.save(checkpoint, os.path.join(self.out_dir, f'ckpt_{iter_num}.pt'))
+                # Reset timer after evaluation to avoid including eval time in iteration timing
+                t0 = time.time()
             if iter_num == 0 and eval_only:
                 break
 
