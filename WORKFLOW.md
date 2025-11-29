@@ -275,7 +275,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -289,7 +289,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -303,7 +303,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 2. Fixed B-heavy (ratio=0.8) - 3 seeds
@@ -319,7 +319,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -333,7 +333,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -347,7 +347,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 3. Fixed Equal (ratio=0.5) - 3 seeds
@@ -363,7 +363,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -377,7 +377,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -391,7 +391,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 4. Fixed A-heavy (ratio=0.2) - 3 seeds
@@ -407,7 +407,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -421,7 +421,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -435,7 +435,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 5. Learned Gating (Adaptive) - 3 seeds
@@ -451,7 +451,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -465,7 +465,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -479,7 +479,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 ### Budget d=2000 (15 runs)
@@ -497,7 +497,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -511,7 +511,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -525,7 +525,7 @@ python experiments/train.py \
     --sublora.allocation_mode=uniform \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 2. Fixed B-heavy (ratio=0.8) - 3 seeds
@@ -541,7 +541,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -555,7 +555,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -569,7 +569,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.8 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 3. Fixed Equal (ratio=0.5) - 3 seeds
@@ -585,7 +585,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -599,7 +599,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -613,7 +613,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 4. Fixed A-heavy (ratio=0.2) - 3 seeds
@@ -629,7 +629,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -643,7 +643,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -657,7 +657,7 @@ python experiments/train.py \
     --sublora.allocation_mode=fixed \
     --sublora.allocation_ratio=0.2 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 #### 5. Learned Gating (Adaptive) - 3 seeds
@@ -673,7 +673,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 123**:
@@ -687,7 +687,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=123 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 **Seed 999**:
@@ -701,7 +701,7 @@ python experiments/train.py \
     --sublora.allocation_mode=learned \
     --sublora.allocation_ratio=0.5 \
     --system.seed=999 \
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 ### Multi-GPU Training (Linux with NCCL)
@@ -717,7 +717,7 @@ torchrun --standalone --nproc_per_node=2 experiments/train.py \
     --sublora.intrinsic_dim=1000 \
     --sublora.allocation_mode=learned \
     --system.seed=42 \
-    --system.compile=False
+    --training.max_iters=10000
 
 # 4 GPUs
 torchrun --standalone --nproc_per_node=4 experiments/train.py \
@@ -736,7 +736,7 @@ python experiments/train.py `
     --sublora.intrinsic_dim=1000 `
     --sublora.allocation_mode=learned `
     --system.seed=42 `
-    --system.compile=False
+    --training.max_iters=10000
 ```
 
 > **Note**: On Windows, the distributed backend falls back to 'gloo' (NCCL is not available). For single-GPU setups, avoid `torchrun` to eliminate unnecessary DDP initialization overhead.

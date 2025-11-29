@@ -69,9 +69,16 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
                     torch.save(model.trainable_initparams, os.path.join(out_dir, 'trainable_initparams.pt'))
                     torch.save(model.names, os.path.join(out_dir, 'names.pt'))
                     
-        elif init_from == 'best_ckpt':
-            print(f"loading best training checkpoint from {best_checkpoint_path} for pretraining bound metrics eval") 
-            ckpt_path = os.path.join(best_checkpoint_path, "best_ckpt.pt")
+        elif init_from == 'resume' or init_from == 'best_ckpt':
+            # For resume, load from best_ckpt.pt in out_dir; for best_ckpt, load from best_checkpoint_path
+            if init_from == 'resume':
+                ckpt_path = os.path.join(out_dir, "best_ckpt.pt")
+                print(f"Resuming training from checkpoint: {ckpt_path}")
+                load_dir = out_dir
+            else:
+                ckpt_path = os.path.join(best_checkpoint_path, "best_ckpt.pt")
+                print(f"loading best training checkpoint from {best_checkpoint_path} for pretraining bound metrics eval")
+                load_dir = best_checkpoint_path
             checkpoint = torch.load(ckpt_path, map_location=device)
             checkpoint_model_args = checkpoint['model_args']
             for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'use_lora', 'lora_alpha', 'lora_dropout',
@@ -88,7 +95,7 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
                             
             if intrinsic_dim > 0:
                 #### loading the random initialization of all the weights 
-                init_ckpt_path = os.path.join(best_checkpoint_path, "forward_ckpt_at_random_initialization.pt")
+                init_ckpt_path = os.path.join(load_dir, "forward_ckpt_at_random_initialization.pt")
                 init_checkpoint = torch.load(init_ckpt_path, map_location=device)
                 unwanted_prefix = '_orig_mod.'
                 for k,v in list(init_checkpoint.items()):
@@ -116,8 +123,8 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
                 model.load_state_dict(state_dict)
                 print('subspace_params loaded!')
 
-                model.trainable_initparams = torch.load(os.path.join(best_checkpoint_path, "trainable_initparams.pt"), map_location=device)
-                model.names = torch.load(os.path.join(best_checkpoint_path, "names.pt"))
+                model.trainable_initparams = torch.load(os.path.join(load_dir, "trainable_initparams.pt"), map_location=device)
+                model.names = torch.load(os.path.join(load_dir, "names.pt"))
                 
             else:
                 model.load_state_dict(state_dict)
@@ -131,7 +138,7 @@ def get_model(n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_ro
             model = GPT.from_pretrained("gpt2", dict(dropout=0.0))
             iter_num, best_val_loss, model_args, nparams = None, None, None, None
         else:
-            raise NotImplemented
+            raise NotImplementedError(f"Unknown init_from value: {init_from}")
         
         model.to(device)
         

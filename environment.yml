@@ -62,6 +62,7 @@ dependencies:
       - exceptiongroup==1.1.2
       - executing==1.2.0
       - fancycompleter==0.9.1
+      - fastargs==1.2.0
       - fastjsonschema==2.18.0
       - filelock==3.12.2
       - fqdn==1.5.1

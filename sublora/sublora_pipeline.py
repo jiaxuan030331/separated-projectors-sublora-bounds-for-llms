@@ -46,6 +46,7 @@ Section("login", "login details").params(
     wandb_log=Param(bool, "disabled by default", default=False),
     wandb_project=Param(str, "name of the project", default='gpt-2'),
     wandb_run_name=Param(str, "name of the run", default='train'),
+    wandb_id=Param(str, "wandb run id to resume (optional)", default=''),
     out_dir=Param(str, "where to save results?", default='out'),
     create_new_output_dir=Param(bool, "default is True", default='True'),
 )
@@ -185,13 +186,13 @@ class SubLoRA():
         self.perturb_word_order_window_size = perturb_word_order_window_size
         self.intrinsic_dim = intrinsic_dim
         self.use_lora = use_lora
+        self.init_from = init_from  # Store init_from early so prepare_common_setup can use it
         print("Setting up the ddp.")
         self.ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
         print("Preparing the common setup.")
         self.prepare_common_setup()
         print("Loading the data.")
         self.data_dir = os.path.join(dataset_dir, dataset)
-        self.init_from = init_from
         self.model_name_or_path = model_name_or_path
         self.dataset = dataset
         self.eval_batch_size = eval_batch_size
@@ -251,8 +252,11 @@ class SubLoRA():
         optimizer = self.model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), self.device_type,
                                                correct_bias, adam_epislon, no_decay_bias)
         if self.init_from == 'resume':
+            # Load checkpoint to restore optimizer state
+            ckpt_path = os.path.join(self.out_dir, "best_ckpt.pt")
+            checkpoint = torch.load(ckpt_path, map_location=self.device)
             optimizer.load_state_dict(checkpoint['optimizer'])
-        checkpoint = None # free up memory
+            checkpoint = None  # free up memory
 
         # compile the model
         if compile and (not self.use_lora) and self.intrinsic_dim == 0:
@@ -424,22 +428,53 @@ class SubLoRA():
     @param("login.wandb_log")
     @param("login.wandb_project")
     @param("login.wandb_run_name")
+    @param("login.wandb_id")
     @param("login.create_new_output_dir")
     @param("login.out_dir")
     @param("sublora.intrinsic_dim")
     @param("optimizer.learning_rate")
     @param("sublora.attention_linear_lora_r")
-    def prepare_common_setup(self, dtype, wandb_log, wandb_project, wandb_run_name, create_new_output_dir, out_dir,
-                             intrinsic_dim, learning_rate, attention_linear_lora_r):
+    @param("model.init_from")
+    def prepare_common_setup(self, dtype, wandb_log, wandb_project, wandb_run_name, wandb_id, create_new_output_dir, out_dir,
+                             intrinsic_dim, learning_rate, attention_linear_lora_r, init_from):
         self.maybe_launch_ddp()
         self.wandb_log = wandb_log
         self.out_dir = out_dir
         wandb_run_name = "id{}_lr{}_r{}".format(intrinsic_dim, learning_rate, attention_linear_lora_r)
         # logging
         if wandb_log and self.master_process:
-            wandb.init(project=wandb_project, name=wandb_run_name, config=self.yaml_config)
+            if wandb_id:
+                # Resume an existing wandb run
+                wandb.init(project=wandb_project, name=wandb_run_name, id=wandb_id, resume="must", config=self.yaml_config)
+            else:
+                # Start a new wandb run
+                wandb.init(project=wandb_project, name=wandb_run_name, config=self.yaml_config)
         # ? creating new output directory
-        if create_new_output_dir:
+        # When resuming, find the latest existing checkpoint directory instead of creating a new one
+        if init_from == "resume":
+            # Find the latest checkpoint directory that contains best_ckpt.pt
+            base_path = os.path.join(self.out_dir, wandb_project, wandb_run_name)
+            if os.path.exists(base_path):
+                # Find a directory with best_ckpt.pt, searching from newest to oldest
+                found_checkpoint = False
+                date_dirs = sorted([d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))], reverse=True)
+                for date_dir in date_dirs:
+                    time_dirs = sorted([d for d in os.listdir(os.path.join(base_path, date_dir)) 
+                                       if os.path.isdir(os.path.join(base_path, date_dir, d))], reverse=True)
+                    for time_dir in time_dirs:
+                        candidate_dir = os.path.join(base_path, date_dir, time_dir)
+                        if os.path.exists(os.path.join(candidate_dir, "best_ckpt.pt")):
+                            self.out_dir = candidate_dir
+                            print(f"Resuming from checkpoint directory: {self.out_dir}")
+                            found_checkpoint = True
+                            break
+                    if found_checkpoint:
+                        break
+                if not found_checkpoint:
+                    raise FileNotFoundError(f"Cannot resume: no best_ckpt.pt found in any subdirectory of {base_path}")
+            else:
+                raise FileNotFoundError(f"Cannot resume: checkpoint directory not found at {base_path}")
+        elif create_new_output_dir:
             now = datetime.datetime.now()
             formatted_date = now.strftime('%Y-%m-%d')
             formatted_time = now.strftime('%H-%M')
