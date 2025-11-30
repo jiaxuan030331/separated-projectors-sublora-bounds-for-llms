@@ -6,15 +6,18 @@
 #SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
-#SBATCH --output=/scratch/%u/sublora/logs/%x_%j.out
-#SBATCH --error=/scratch/%u/sublora/logs/%x_%j.err
+#SBATCH --output=/scratch/%u/sublora-experiments/%x/logs/%j.out
+#SBATCH --error=/scratch/%u/sublora-experiments/%x/logs/%j.err
 #SBATCH --requeue
 
 # ============================================================
 # SubLoRA Training Job Template for NYU HPC Cloud Bursting
 # ============================================================
+# Each experiment gets its own folder:
+#   /scratch/<NetID>/sublora-experiments/sublora-d1000-uniform-seed42/
+#
 # Usage: 
-#   sbatch --job-name=d1000_uniform_seed42 \
+#   sbatch --job-name=sublora-d1000-uniform-seed42 \
 #          --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 \
 #          run_single_job.slurm
 # ============================================================
@@ -25,24 +28,46 @@ MODE=${MODE:-uniform}
 RATIO=${RATIO:-0.5}
 SEED=${SEED:-42}
 
-# Directories
-WORK_DIR="/scratch/$USER/sublora"
-DATA_DIR="$WORK_DIR/data"
-RUN_NAME="d${DIM}_${MODE}"
-[[ "$MODE" == "fixed" && "$RATIO" == "0.8" ]] && RUN_NAME="d${DIM}_fixed_bheavy"
-[[ "$MODE" == "fixed" && "$RATIO" == "0.5" ]] && RUN_NAME="d${DIM}_fixed_equal"
-[[ "$MODE" == "fixed" && "$RATIO" == "0.2" ]] && RUN_NAME="d${DIM}_fixed_aheavy"
-OUT_DIR="$WORK_DIR/out/adaptive_experiments/${RUN_NAME}_seed${SEED}"
+# Build experiment name based on mode
+if [[ "$MODE" == "fixed" ]]; then
+    if [[ "$RATIO" == "0.8" ]]; then
+        MODE_NAME="fixed-bheavy"
+    elif [[ "$RATIO" == "0.5" ]]; then
+        MODE_NAME="fixed-equal"
+    elif [[ "$RATIO" == "0.2" ]]; then
+        MODE_NAME="fixed-aheavy"
+    else
+        MODE_NAME="fixed-r${RATIO}"
+    fi
+else
+    MODE_NAME="$MODE"
+fi
 
-# Create directories
-mkdir -p $OUT_DIR
-mkdir -p $WORK_DIR/logs
+# Experiment folder name: sublora-d1000-uniform-seed42
+EXP_NAME="sublora-d${DIM}-${MODE_NAME}-seed${SEED}"
+
+# Directories - each experiment gets its own folder
+BASE_DIR="/scratch/$USER/sublora-experiments"
+EXP_DIR="$BASE_DIR/$EXP_NAME"
+DATA_DIR="/scratch/$USER/sublora-data"  # Shared data directory
+OUT_DIR="$EXP_DIR/out"
+
+# Create experiment directory structure
+mkdir -p $EXP_DIR/{out,logs,config}
+mkdir -p $DATA_DIR
+
+# Copy config files to experiment folder (first run only)
+if [ ! -f "$EXP_DIR/config/sublora_train.yaml" ]; then
+    cp /scratch/$USER/sublora-repo/config/*.yaml $EXP_DIR/config/ 2>/dev/null || true
+fi
 
 echo "============================================"
+echo "Experiment: $EXP_NAME"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Config: dim=$DIM, mode=$MODE, ratio=$RATIO, seed=$SEED"
-echo "Output: $OUT_DIR"
+echo "Experiment Dir: $EXP_DIR"
+echo "Output Dir: $OUT_DIR"
 echo "Start time: $(date)"
 echo "============================================"
 
@@ -61,13 +86,13 @@ singularity exec --nv \
         source /ext3/env.sh
         conda activate sublora
         
-        cd $WORK_DIR
+        cd /scratch/$USER/sublora-repo
         
         python experiments/train.py \
             --config-file=config/sublora_train.yaml \
             --data.dataset_dir=$DATA_DIR \
             --login.out_dir=$OUT_DIR \
-            --login.wandb_run_name=${RUN_NAME}_s${SEED} \
+            --login.wandb_run_name=$EXP_NAME \
             --sublora.intrinsic_dim=$DIM \
             --sublora.allocation_mode=$MODE \
             --sublora.allocation_ratio=$RATIO \
