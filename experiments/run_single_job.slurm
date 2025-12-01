@@ -31,6 +31,7 @@ DIM=${DIM:-1000}
 MODE=${MODE:-uniform}
 RATIO=${RATIO:-0.5}
 SEED=${SEED:-42}
+WANDB_DISABLED=${WANDB_DISABLED:-false}  # Set to 'true' to disable wandb logging
 
 # Build experiment name based on mode
 if [[ "$MODE" == "fixed" ]]; then
@@ -83,15 +84,47 @@ if [ -f "$OUT_DIR/best_ckpt.pt" ]; then
 fi
 
 # Run training with Singularity + Conda
+# Note: /scratch is auto-mounted on burst nodes, no --bind needed
 singularity exec --nv \
     --overlay /scratch/$USER/sublora_env.ext3:ro \
-    --bind /scratch:/scratch \
     /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
     /bin/bash -c "
         source /ext3/env.sh
+        source /ext3/miniconda3/etc/profile.d/conda.sh
         conda activate sublora
         
         cd /scratch/$USER/sublora-repo
+        
+        # Ensure output directory exists and is writable
+        mkdir -p $OUT_DIR
+        
+        # ============================================================
+        # WANDB AUTHENTICATION
+        # ============================================================
+        # Option 1: Set your API key here (not recommended for shared scripts)
+        # export WANDB_API_KEY='your-api-key-here'
+        
+        # Option 2: Read from a secure file (recommended)
+        # Create this file once: echo 'your-api-key' > /scratch/\$USER/.wandb_api_key && chmod 600 /scratch/\$USER/.wandb_api_key
+        if [ -f /scratch/$USER/.wandb_api_key ]; then
+            export WANDB_API_KEY=\$(cat /scratch/$USER/.wandb_api_key)
+        fi
+        
+        # Set wandb directories to writable locations (inside experiment's out folder)
+        export WANDB_DIR=$OUT_DIR
+        export WANDB_CACHE_DIR=$OUT_DIR/.wandb_cache
+        export WANDB_CONFIG_DIR=$OUT_DIR/.wandb_config
+        export WANDB_DATA_DIR=$OUT_DIR/.wandb_data
+        export WANDB_SILENT=true
+        mkdir -p $OUT_DIR/.wandb_cache $OUT_DIR/.wandb_config $OUT_DIR/.wandb_data
+        
+        # Optionally disable wandb
+        if [ \"$WANDB_DISABLED\" = \"true\" ]; then
+            export WANDB_MODE=disabled
+            WANDB_FLAG=\"--login.wandb_log=False\"
+        else
+            WANDB_FLAG=\"\"
+        fi
         
         python experiments/train.py \
             --config-file=config/sublora_train.yaml \
@@ -104,6 +137,7 @@ singularity exec --nv \
             --system.seed=$SEED \
             --system.compile=True \
             --training.max_iters=10000 \
+            \$WANDB_FLAG \
             $RESUME_FLAG
     "
 

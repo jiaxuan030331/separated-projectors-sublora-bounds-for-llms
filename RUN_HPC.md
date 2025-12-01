@@ -12,6 +12,82 @@
 
 ---
 
+## ⚠️ IMPORTANT: Understanding the Filesystem Architecture
+
+NYU HPC has **TWO separate systems** with **separate `/scratch/` storage**:
+
+### Greene vs Burst Architecture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                        GREENE (NYU On-Premise)                                ║
+║                                                                               ║
+║   ┌────────────────┐         ┌────────────────┐                               ║
+║   │  Login Nodes   │         │   log-burst    │                               ║
+║   │ (greene.hpc)   │────────>│  (ssh burst)   │                               ║
+║   └────────────────┘         └───────┬────────┘                               ║
+║          │                           │                                        ║
+║          │                           │              ┌───────────────────────┐ ║
+║          │                           │              │   GREENE /scratch/    │ ║
+║          └───────────────────────────┼─────────────>│   (On-Premise NFS)    │ ║
+║                                      │              │                       │ ║
+║                          Both see ───┘              └───────────────────────┘ ║
+║                          this storage                         ▲               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+                                       │
+                                       │ sbatch submits jobs
+                                       │ to Google Cloud
+                                       ▼
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                        BURST (Google Cloud)                                   ║
+║                                                                               ║
+║   ┌────────────────┐         ┌────────────────┐                               ║
+║   │   OOD Burst    │         │ Compute Nodes  │                               ║
+║   │ (ood-burst-    │         │  (your jobs)   │                               ║
+║   │  001.hpc.nyu)  │         └───────┬────────┘                               ║
+║   └───────┬────────┘                 │                                        ║
+║           │                          │              ┌───────────────────────┐ ║
+║           │                          │              │   BURST /scratch/     │ ║
+║           └──────────────────────────┼─────────────>│   (Google Cloud)      │ ║
+║                                      │              │      SEPARATE!        │ ║
+║                          Both see ───┘              └───────────────────────┘ ║
+║                          THIS storage                                         ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Which `/scratch/` do you see?
+
+| Access Method | Which `/scratch/` |
+|---------------|-------------------|
+| `ssh greene.hpc.nyu.edu` | Greene's `/scratch/` |
+| `ssh greene` → `ssh burst` (terminal) | **Greene's `/scratch/`** ⚠️ |
+| OOD Greene (`ood.hpc.nyu.edu`, `ood-4.hpc...`) | Greene's `/scratch/` |
+| **OOD Burst** (`ood-burst-001.hpc.nyu.edu`) | **Burst's `/scratch/`** ✅ |
+| **Burst compute nodes** (running jobs) | **Burst's `/scratch/`** ✅ |
+
+### Key Implications
+
+1. **`ssh burst` is misleading**: Even after running `ssh burst` from Greene, you're on a gateway node that still sees Greene's filesystem. You are NOT on burst's cloud storage yet.
+
+2. **Jobs write to Burst's `/scratch/`**: When your SLURM jobs run, they execute on Google Cloud compute nodes and write to burst's cloud-based `/scratch/`.
+
+3. **To see job output files**: Use **OOD Burst** (`ood-burst-001.hpc.nyu.edu`) or start an interactive job:
+   ```bash
+   # From log-burst (after ssh burst)
+   srun --account=ds_ga_1006-2025fa --partition=interactive --time=01:00:00 --pty /bin/bash
+   # Now you're on an actual cloud node and can see burst's /scratch/
+   ```
+
+4. **File transfers between systems**: Use `scp` with `greene-dtn`:
+   ```bash
+   # From burst compute node or OOD Burst terminal
+   scp greene-dtn:/scratch/$USER/file.txt /scratch/$USER/
+   ```
+
+5. **Recommended workflow**: Use **OOD Burst** (`ood-burst-001.hpc.nyu.edu`) for all burst work - file editing, job submission, and viewing output. This avoids confusion between the two filesystems.
+
+---
+
 ## Initial Setup (One-Time)
 
 ### 1. Access Cloud Bursting
@@ -95,7 +171,7 @@ scp -rp greene-dtn:/scratch/sons01/sublora-repo /scratch/sons01/
 cp /share/apps/overlay-fs-ext3/overlay-15GB-500K.ext3.gz /scratch/$USER/sublora_env.ext3.gz
 gunzip /scratch/$USER/sublora_env.ext3.gz
 
-# Start interactive session for setup
+# Start interactive session for setup (IMPORTANT)
 srun --account=ds_ga_1006-2025fa --partition=interactive --time=02:00:00 --pty /bin/bash
 
 # Install conda in overlay (--bind mounts /scratch inside the container)
@@ -146,6 +222,25 @@ singularity exec --overlay /scratch/$USER/sublora_env.ext3:ro \
     "
 ```
 
+### 5. Set Up Weights & Biases (wandb) Authentication
+
+To enable wandb logging, you need to store your API key securely:
+
+```bash
+# Get your API key from https://wandb.ai/authorize
+# Then create a secure key file on burst:
+echo 'your-wandb-api-key-here' > /scratch/$USER/.wandb_api_key
+chmod 600 /scratch/$USER/.wandb_api_key
+```
+
+The SLURM script will automatically read this file and set `WANDB_API_KEY`.
+
+**Alternative: Disable wandb** if you don't need logging:
+```bash
+# Add WANDB_DISABLED=true to your sbatch --export
+sbatch --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42,WANDB_DISABLED=true ...
+```
+
 ---
 
 ## Running Experiments
@@ -159,6 +254,15 @@ Examples:
 - `sublora-d1000-uniform-seed42`
 - `sublora-d1000-fixed-bheavy-seed42`
 - `sublora-d2000-learned-seed999`
+
+### Environment Variables
+
+The job script supports these environment variables:
+- `DIM` - Intrinsic dimension (1000 or 2000)
+- `MODE` - Allocation mode (uniform, fixed, learned)
+- `RATIO` - Allocation ratio for fixed mode (0.2, 0.5, 0.8)
+- `SEED` - Random seed (42, 123, 999)
+- `WANDB_DISABLED` - Set to `true` to disable wandb logging (default: `false`)
 
 ### Option 1: Submit All 30 Jobs at Once
 
