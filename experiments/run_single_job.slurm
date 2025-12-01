@@ -3,11 +3,12 @@
 #SBATCH --account=ds_ga_1006-2025fa
 #SBATCH --partition=c12m85-a100-1
 #SBATCH --gres=gpu:1
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
-#SBATCH --output=/scratch/%u/sublora-experiments/%x/logs/%j.out
-#SBATCH --error=/scratch/%u/sublora-experiments/%x/logs/%j.err
+#SBATCH --output=/scratch/%u/sublora-logs/%x_%j.out
+#SBATCH --error=/scratch/%u/sublora-logs/%x_%j.err
+#SBATCH --open-mode=append
 #SBATCH --requeue
 
 # ============================================================
@@ -21,6 +22,9 @@
 #          --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 \
 #          run_single_job.slurm
 # ============================================================
+
+# Ensure USER is set (sometimes not available on compute nodes)
+USER=${USER:-$(whoami)}
 
 # Default values (override via --export)
 DIM=${DIM:-1000}
@@ -81,7 +85,8 @@ fi
 # Run training with Singularity + Conda
 singularity exec --nv \
     --overlay /scratch/$USER/sublora_env.ext3:ro \
-    /share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
+    --bind /scratch:/scratch \
+    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
     /bin/bash -c "
         source /ext3/env.sh
         conda activate sublora

@@ -35,10 +35,27 @@ ssh burst
 mkdir -p /scratch/$USER/sublora-repo
 mkdir -p /scratch/$USER/sublora-data
 mkdir -p /scratch/$USER/sublora-experiments
+```
 
-# Clone your repo
-cd /scratch/$USER
+### 2b. Upload Code from Local Machine
+
+Git is not available on burst nodes. Upload your local repo directly from Windows PowerShell:
+
+```powershell
+# From your local Windows machine, upload the entire repo
+scp -rp "C:\Users\sunny\OneDrive\Documents\GitHub\separated-projectors-sublora-bounds-for-llms\*" sons01@greene-dtn.hpc.nyu.edu:/scratch/sons01/sublora-repo/
+```
+
+**Alternative**: Clone from Greene first, then copy to burst:
+```bash
+# On Greene (not burst) - git is available there
+ssh sons01@greene.hpc.nyu.edu
+cd /scratch/sons01
 git clone https://github.com/jiaxuan030331/separated-projectors-sublora-bounds-for-llms.git sublora-repo
+
+# Then from burst, copy it over
+ssh burst
+scp -rp greene-dtn:/scratch/sons01/sublora-repo /scratch/sons01/
 ```
 
 ### Directory Structure Overview
@@ -81,9 +98,10 @@ gunzip /scratch/$USER/sublora_env.ext3.gz
 # Start interactive session for setup
 srun --account=ds_ga_1006-2025fa --partition=interactive --time=02:00:00 --pty /bin/bash
 
-# Install conda in overlay
+# Install conda in overlay (--bind mounts /scratch inside the container)
 singularity exec --overlay /scratch/$USER/sublora_env.ext3:rw \
-    /share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif /bin/bash
+    --bind /scratch:/scratch \
+    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif /bin/bash
 
 # Inside singularity container:
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
@@ -99,18 +117,12 @@ EOF
 
 source /ext3/env.sh
 
-# Create sublora environment
-conda create -n sublora python=3.10 -y
+# Create sublora environment from environment.yml
+cd /scratch/$USER/sublora-repo
+conda env create -f environment.yml
 conda activate sublora
 
-# Install PyTorch with CUDA 12.1
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install other dependencies
-pip install transformers datasets tiktoken wandb numpy tqdm pyyaml
-
-# Install sublora package
-cd /scratch/$USER/sublora-repo
+# Install sublora package in editable mode
 pip install -e .
 
 # Exit singularity
@@ -125,7 +137,7 @@ scp -rp greene-dtn:/scratch/<NetID>/sublora/data/* /scratch/$USER/sublora-data/
 
 # Or if preparing fresh:
 singularity exec --overlay /scratch/$USER/sublora_env.ext3:ro \
-    /share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
+    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
     /bin/bash -c "
         source /ext3/env.sh
         conda activate sublora
@@ -189,60 +201,146 @@ sbatch --job-name=sublora-d2000-uniform-seed999 \
 
 ### Complete List of All 30 Experiment Commands
 
+**Note:** If you get "DOS line breaks" error, first run:
+```bash
+sed -i 's/\r$//' /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sed -i 's/\r$//' /scratch/$USER/sublora-repo/experiments/submit_hpc_jobs.sh
+```
+
 ```bash
 # ============== d=1000 Experiments ==============
 
 # Uniform (baseline)
-sbatch --job-name=sublora-d1000-uniform-seed42 --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-uniform-seed123 --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-uniform-seed999 --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d1000-uniform-seed42 \
+    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-uniform-seed123 \
+    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-uniform-seed999 \
+    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed B-heavy (ratio=0.8)
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed42 --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed123 --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed999 --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d1000-fixed-bheavy-seed42 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-bheavy-seed123 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-bheavy-seed999 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed Equal (ratio=0.5)
-sbatch --job-name=sublora-d1000-fixed-equal-seed42 --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-equal-seed123 --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-equal-seed999 --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d1000-fixed-equal-seed42 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-equal-seed123 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-equal-seed999 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed A-heavy (ratio=0.2)
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed42 --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed123 --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed999 --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d1000-fixed-aheavy-seed42 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-aheavy-seed123 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-fixed-aheavy-seed999 \
+    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Learned
-sbatch --job-name=sublora-d1000-learned-seed42 --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-learned-seed123 --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d1000-learned-seed999 --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d1000-learned-seed42 \
+    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-learned-seed123 \
+    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d1000-learned-seed999 \
+    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # ============== d=2000 Experiments ==============
 
 # Uniform (baseline)
-sbatch --job-name=sublora-d2000-uniform-seed42 --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-uniform-seed123 --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-uniform-seed999 --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d2000-uniform-seed42 \
+    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-uniform-seed123 \
+    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-uniform-seed999 \
+    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed B-heavy (ratio=0.8)
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed42 --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed123 --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed999 --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d2000-fixed-bheavy-seed42 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-bheavy-seed123 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-bheavy-seed999 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed Equal (ratio=0.5)
-sbatch --job-name=sublora-d2000-fixed-equal-seed42 --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-equal-seed123 --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-equal-seed999 --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d2000-fixed-equal-seed42 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-equal-seed123 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-equal-seed999 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed A-heavy (ratio=0.2)
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed42 --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed123 --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed999 --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d2000-fixed-aheavy-seed42 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-aheavy-seed123 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-fixed-aheavy-seed999 \
+    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Learned
-sbatch --job-name=sublora-d2000-learned-seed42 --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=42 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-learned-seed123 --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=123 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-sbatch --job-name=sublora-d2000-learned-seed999 --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=999 /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+sbatch --job-name=sublora-d2000-learned-seed42 \
+    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=42 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-learned-seed123 \
+    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=123 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
+
+sbatch --job-name=sublora-d2000-learned-seed999 \
+    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=999 \
+    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 ```
 
 ### Option 3: Interactive GPU Session
@@ -253,7 +351,7 @@ srun --account=ds_ga_1006-2025fa --partition=c12m85-a100-1 --gres=gpu --time=04:
 
 # Inside the session:
 singularity exec --nv --overlay /scratch/$USER/sublora_env.ext3:ro \
-    /share/apps/images/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif /bin/bash
+    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif /bin/bash
 
 source /ext3/env.sh
 conda activate sublora
@@ -399,7 +497,7 @@ rsync -avz --progress \
 - If OOM, reduce batch size in config
 
 ### CUDA Version Mismatch
-- Use matching Singularity image: `cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif`
+- Use matching Singularity image: `/scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif`
 - Ensure PyTorch was installed with `cu121`
 
 ### Cannot Connect to wandb
