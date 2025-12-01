@@ -135,7 +135,11 @@ singularity exec --nv \
             --sublora.allocation_mode=$MODE \
             --sublora.allocation_ratio=$RATIO \
             --system.seed=$SEED \
-            --system.compile=True \
+            --system.compile=False \
+            --data.batch_size=12 \
+            --training.gradient_accumulation_steps=5 \
+            --training.eval_interval=100 \
+            --training.log_interval=10 \
             --training.max_iters=10000 \
             \$WANDB_FLAG \
             $RESUME_FLAG
