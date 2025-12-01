@@ -712,22 +712,35 @@ class IdentityOperator(LinearOperator):
 
 
 class Lazy(LinearOperator):
-    def __init__(self,dense_matrix):
+    def __init__(self, dense_matrix):
         self.A = dense_matrix
-        super().__init__(None,self.A.shape)
+        super().__init__(None, self.A.shape)
+        self._cached_A = None
+    
+    def _get_A(self, v):
+        """Get A matrix on the same device and dtype as v, with caching."""
+        target_device = v.device
+        target_dtype = v.dtype
         
-    def _matmat(self,V):
-        self.A = self.A.to(V.device)
-        return self.A@V
-    def _matvec(self,v):
-        self.A = self.A.to(v.device)
-        return self.A@v
-    def _rmatmat(self,V):
-        self.A = self.A.to(V.device)
-        return self.A.T@V
-    def _rmatvec(self,v):
-        self.A = self.A.to(v.device)
-        return self.A.T@v
+        if self._cached_A is not None:
+            if self._cached_A.device == target_device and self._cached_A.dtype == target_dtype:
+                return self._cached_A
+        
+        self._cached_A = self.A.to(device=target_device, dtype=target_dtype)
+        return self._cached_A
+        
+    def _matmat(self, V):
+        return self._get_A(V) @ V
+    
+    def _matvec(self, v):
+        return self._get_A(v) @ v
+    
+    def _rmatmat(self, V):
+        return self._get_A(V).T @ V
+    
+    def _rmatvec(self, v):
+        return self._get_A(v).T @ v
+    
     def to_dense(self):
         return self.A
 
@@ -780,26 +793,68 @@ class I(LinearOperator):
         return self
 
 class LazyKron(LinearOperator):
-
-    def __init__(self,Ms):
+    """Kronecker product of linear operators.
+    
+    For matrices A (m×n) and B (p×q), the Kronecker product A⊗B is (mp×nq).
+    This class represents the Kronecker product without materializing it.
+    
+    The key insight for efficient computation:
+    (A⊗B)vec(X) = vec(BXA^T) for appropriately shaped X
+    """
+    def __init__(self, Ms):
         self.Ms = Ms
         shape = product([Mi.shape[0] for Mi in Ms]), product([Mi.shape[1] for Mi in Ms])
-        #self.dtype=Ms[0].dtype
-        super().__init__(None,shape)
+        super().__init__(None, shape)
 
-    def _matvec(self,v):
-        return self._matmat(v).reshape(-1)
-    def _matmat(self,v):
-        ev = v.reshape(*[Mi.shape[-1] for Mi in self.Ms],-1)
-        for i,M in enumerate(self.Ms):
-            ev_front = torch.moveaxis(ev,i,0)
-            Mev_front = (M@ev_front.reshape(M.shape[-1],-1)).reshape(M.shape[0],*ev_front.shape[1:])
-            ev = torch.moveaxis(Mev_front,0,i)
-        return ev.reshape(self.shape[0],ev.shape[-1])
+    def _matvec(self, v):
+        return self._matmat(v.unsqueeze(1)).squeeze(1) if v.dim() == 1 else self._matmat(v).reshape(-1)
+    
+    def _matmat(self, v):
+        """Efficient Kronecker product computation using reshape and batched matmul."""
+        # For 2 matrices A⊗B with shapes (m,n) and (p,q):
+        # Input v has shape (n*q,) or (n*q, k)
+        # Output has shape (m*p,) or (m*p, k)
+        
+        if v.dim() == 1:
+            v = v.unsqueeze(1)
+            squeeze = True
+        else:
+            squeeze = False
+        
+        k = v.shape[1]  # batch dimension
+        
+        # Reshape v to tensor form: (n1, n2, ..., k) where ni = Mi.shape[1]
+        input_shapes = [Mi.shape[-1] for Mi in self.Ms]
+        ev = v.reshape(*input_shapes, k)
+        
+        # Apply each matrix along its corresponding axis
+        for i, M in enumerate(self.Ms):
+            # Move axis i to front, apply M, move back
+            ev = torch.movedim(ev, i, 0)
+            original_shape = ev.shape
+            # Flatten all dims except first into batch
+            ev_flat = ev.reshape(M.shape[-1], -1)
+            # Apply M: (m, n) @ (n, batch) -> (m, batch)
+            Mev = M @ ev_flat
+            # Reshape back
+            new_shape = (M.shape[0],) + original_shape[1:]
+            ev = Mev.reshape(new_shape)
+            ev = torch.movedim(ev, 0, i)
+        
+        # Reshape to output: (m1*m2*..., k)
+        result = ev.reshape(self.shape[0], k)
+        
+        if squeeze:
+            result = result.squeeze(1)
+        
+        return result
+    
     def _adjoint(self):
         return LazyKron([Mi.T for Mi in self.Ms])
-    def __new__(cls,Ms):
-        if len(Ms)==1: return Ms[0]
+    
+    def __new__(cls, Ms):
+        if len(Ms) == 1:
+            return Ms[0]
         return super().__new__(cls)
 
 
@@ -822,51 +877,148 @@ class ConcatLazy(LinearOperator):
     
 
 class LazyPerm(LinearOperator):
-    def __init__(self,perm):
-        self.perm=perm
-        shape = (len(perm),len(perm))
-        super().__init__(None,shape)
+    def __init__(self, perm):
+        self.perm = perm
+        shape = (len(perm), len(perm))
+        super().__init__(None, shape)
+        self._cached_perm = None
 
-    def _matmat(self,V):
-        return V[self.perm]
-    def _matvec(self,V):
-        return V[self.perm]
+    def _get_perm(self, v):
+        """Get permutation on the same device as v, with caching."""
+        target_device = v.device
+        
+        if self._cached_perm is not None and self._cached_perm.device == target_device:
+            return self._cached_perm
+        
+        self._cached_perm = self.perm.to(target_device)
+        return self._cached_perm
+
+    def _matmat(self, V):
+        return V[self._get_perm(V)]
+    
+    def _matvec(self, V):
+        return V[self._get_perm(V)]
+    
     def _adjoint(self):
         return LazyPerm(torch.argsort(self.perm))
 
-def lazy_direct_matmat(v,Ms,mults):
-    n = v.shape[0]
-    k = v.shape[1] if len(v.shape)>1 else 1
-    i=0
-    y = []
-    for M, multiplicity in zip(Ms,mults):
-        i_end = i+multiplicity*M.shape[-1]
-        elems = M@v[i:i_end].T.reshape(k*multiplicity,M.shape[-1]).T
-        y.append(elems.T.reshape(k,multiplicity*M.shape[0]).T)
-        i = i_end
-    y = torch.cat(y,dim=0) #concatenate over rep axis
-    return  y
+def lazy_direct_matmat(v, Ms, mults):
+    """Efficient block-diagonal matrix-vector multiplication.
+    
+    For a block diagonal matrix with blocks M1, M2, ... (each with multiplicity),
+    computes the product with vector v by processing each block separately.
+    """
+    # Handle 1D vector case
+    if v.dim() == 1:
+        v = v.unsqueeze(1)
+        squeeze_output = True
+    else:
+        squeeze_output = False
+    
+    k = v.shape[1]  # number of columns
+    
+    results = []
+    col_offset = 0
+    
+    for M, multiplicity in zip(Ms, mults):
+        block_cols = multiplicity * M.shape[-1]
+        block_rows = multiplicity * M.shape[0]
+        
+        # Extract the relevant portion of v for this block
+        v_block = v[col_offset:col_offset + block_cols]
+        
+        if multiplicity == 1:
+            # Simple case: just apply M
+            result_block = M @ v_block
+        else:
+            # Multiple copies of M on the diagonal
+            # Reshape v_block to (M.shape[-1], multiplicity * k)
+            v_reshaped = v_block.reshape(multiplicity, M.shape[-1], k).permute(1, 0, 2).reshape(M.shape[-1], -1)
+            # Apply M
+            Mv = M @ v_reshaped
+            # Reshape back to (multiplicity * M.shape[0], k)
+            result_block = Mv.reshape(M.shape[0], multiplicity, k).permute(1, 0, 2).reshape(-1, k)
+        
+        results.append(result_block)
+        col_offset += block_cols
+    
+    output = torch.cat(results, dim=0)
+    
+    if squeeze_output:
+        output = output.squeeze(1)
+    
+    return output
+
 
 class LazyDirectSum(LinearOperator):
-    def __init__(self,Ms,multiplicities=None):
-        self.Ms = [jax.device_put(M.astype(np.float32)) if isinstance(M,(np.ndarray)) else M for M in Ms]
+    """Block diagonal linear operator.
+    
+    Represents a block diagonal matrix with blocks Ms[0], Ms[1], ...
+    Each block can have a multiplicity (repeated on diagonal).
+    """
+    def __init__(self, Ms, multiplicities=None):
+        # Convert numpy arrays to torch tensors
+        processed_Ms = []
+        for M in Ms:
+            if isinstance(M, np.ndarray):
+                # Keep original dtype, don't force float32
+                processed_Ms.append(torch.from_numpy(M))
+            else:
+                processed_Ms.append(M)
+        self.Ms = processed_Ms
+        self._cached_Ms = None  # Cache for device/dtype converted matrices
+        
         self.multiplicities = [1 for M in Ms] if multiplicities is None else multiplicities
-        shape = (sum(Mi.shape[0]*c for Mi,c in zip(Ms,self.multiplicities)),
-                      sum(Mi.shape[1]*c for Mi,c in zip(Ms,self.multiplicities)))
-        super().__init__(None,shape)
-        #self.dtype=Ms[0].dtype
-        #self.dtype=jnp.dtype('float32')
+        shape = (sum(Mi.shape[0] * c for Mi, c in zip(self.Ms, self.multiplicities)),
+                 sum(Mi.shape[1] * c for Mi, c in zip(self.Ms, self.multiplicities)))
+        super().__init__(None, shape)
 
-    def _matvec(self,v):
-        return lazy_direct_matmat(v,self.Ms,self.multiplicities)
+    def _get_Ms(self, v):
+        """Get all block matrices on the same device and dtype as v, with caching."""
+        target_device = v.device
+        target_dtype = v.dtype
+        
+        if self._cached_Ms is not None:
+            # Check if cache is valid (same device and dtype)
+            sample = self._cached_Ms[0]
+            if hasattr(sample, 'device'):
+                if sample.device == target_device and sample.dtype == target_dtype:
+                    return self._cached_Ms
+        
+        # Convert all matrices to target device/dtype
+        cached = []
+        for M in self.Ms:
+            if isinstance(M, LinearOperator):
+                cached.append(M)  # LinearOperators handle their own caching
+            elif isinstance(M, torch.Tensor):
+                cached.append(M.to(device=target_device, dtype=target_dtype))
+            else:
+                cached.append(torch.tensor(M, device=target_device, dtype=target_dtype))
+        
+        self._cached_Ms = cached
+        return self._cached_Ms
 
-    def _matmat(self,v): # (n,k)
-        return lazy_direct_matmat(v,self.Ms,self.multiplicities)
+    def _matvec(self, v):
+        return lazy_direct_matmat(v, self._get_Ms(v), self.multiplicities)
+
+    def _matmat(self, v):
+        return lazy_direct_matmat(v, self._get_Ms(v), self.multiplicities)
+    
     def _adjoint(self):
-        return LazyDirectSum([Mi.T for Mi in self.Ms])
+        return LazyDirectSum([Mi.T for Mi in self.Ms], self.multiplicities)
+    
     def invT(self):
-        return LazyDirectSum([M.invT() for M in self.Ms])
+        return LazyDirectSum([M.invT() for M in self.Ms], self.multiplicities)
+    
     def to_dense(self):
-        Ms_all = [M for M,c in zip(self.Ms,self.multiplicities) for _ in range(c)]
-        Ms_all = [Mi.to_dense() if isinstance(Mi,LinearOperator) else Mi for Mi in Ms_all]
-        return jax.scipy.linalg.block_diag(*Ms_all)
+        """Convert to dense block diagonal matrix using PyTorch."""
+        Ms_all = [M for M, c in zip(self.Ms, self.multiplicities) for _ in range(c)]
+        Ms_dense = []
+        for Mi in Ms_all:
+            if isinstance(Mi, LinearOperator):
+                Ms_dense.append(Mi.to_dense())
+            elif isinstance(Mi, torch.Tensor):
+                Ms_dense.append(Mi)
+            else:
+                Ms_dense.append(torch.tensor(Mi))
+        return torch.block_diag(*Ms_dense)

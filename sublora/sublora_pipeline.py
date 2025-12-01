@@ -360,15 +360,10 @@ class SubLoRA():
                     # I really dislike that this bloats the code and forces us to repeat code
                     # looking at the source of that context manager, it just toggles this variable
                     self.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-                if self.intrinsic_dim == 0:
-                    with self.ctx:
-                        logits, loss = self.model(X, Y)
-                        loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-                    # immediately async prefetch next batch while model is doing the forward pass on the GPU
-                else:
+                with self.ctx:
                     logits, loss = self.model(X, Y)
                     loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-                    # immediately async prefetch next batch while model is doing the forward pass on the GPU
+                # immediately async prefetch next batch while model is doing the forward pass on the GPU
                 X, Y, ix = get_batch('train', self.train_data, self.val_data, self.batch_size, self.block_size,
                                      self.device_type, self.device, self.perturb_word_order_window_size)
                 # backward pass, with gradient scaling if training in fp16
@@ -413,10 +408,7 @@ class SubLoRA():
             for k in range(eval_iters):
                 X, Y, ix = get_batch(split, self.train_data, self.val_data, self.batch_size, self.block_size,
                                      self.device_type, self.device, self.perturb_word_order_window_size)
-                if self.intrinsic_dim == 0:
-                    with self.ctx:
-                        _, loss = self.model(X, Y)
-                else:
+                with self.ctx:
                     _, loss = self.model(X, Y)
                 losses[k] = loss.item()
                 

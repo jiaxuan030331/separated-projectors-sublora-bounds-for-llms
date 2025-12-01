@@ -238,6 +238,7 @@ class RandomMultiply(torch.autograd.Function):
     @staticmethod
     def forward(ctx, v, D, d, seed):
         ctx.info = (D, d, seed)
+        ctx.dtype = v.dtype  # Save dtype for backward pass
         with FixedPytorchSeed(seed):
             D_chunks = int(np.ceil((D * d) / RandomMultiply.CHUNK_MAX))
             D_chunksize = D // D_chunks
@@ -247,7 +248,7 @@ class RandomMultiply(torch.autograd.Function):
                 D_chunk = min(D_chunksize, D - D_tot)
                 D_tot += D_chunk
                 Pv_chunks.append(
-                    torch.randn(D_chunk, d, device=v.device) @ v / np.sqrt(D)
+                    torch.randn(D_chunk, d, device=v.device, dtype=v.dtype) @ v / np.sqrt(D)
                 )
             Pv = torch.cat(Pv_chunks, dim=0)
         return Pv
@@ -256,6 +257,7 @@ class RandomMultiply(torch.autograd.Function):
     def backward(ctx, grad_output):
 
         D, d, seed = ctx.info
+        dtype = grad_output.dtype  # Use grad_output's dtype directly
         grad_in = 0.0
         with FixedPytorchSeed(seed):
             D_chunks = int(np.ceil((D * d) / RandomMultiply.CHUNK_MAX))
@@ -263,7 +265,7 @@ class RandomMultiply(torch.autograd.Function):
             split_grad_outs = torch.split(grad_output, D_chunksize, dim=0)
             for grad_out in split_grad_outs:
                 grad_in += (
-                    torch.randn(grad_out.shape[0], d, device=grad_output.device).T
+                    torch.randn(grad_out.shape[0], d, device=grad_output.device, dtype=dtype).T
                     @ grad_out
                     / np.sqrt(D)
                 )
@@ -293,12 +295,26 @@ class LazyRandomQR(LinearOperator):
         self.info = (D, d, seed)
         self.P = torch.randn(D, d)
         self.P, _ = torch.linalg.qr(self.P, mode="reduced")
+        self._cached_P = None  # Cache for device/dtype converted matrix
+
+    def _get_P(self, v):
+        """Get P matrix on the same device and dtype as v, with caching."""
+        target_device = v.device
+        target_dtype = v.dtype
+        
+        if self._cached_P is not None:
+            if self._cached_P.device == target_device and self._cached_P.dtype == target_dtype:
+                return self._cached_P
+        
+        # Convert and cache
+        self._cached_P = self.P.to(device=target_device, dtype=target_dtype)
+        return self._cached_P
 
     def _matvec(self, v):
-        return self.P.to(v.device) @ v
+        return self._get_P(v) @ v
 
     def _matmat(self, v):
-        return self.P.to(v.device) @ v
+        return self._get_P(v) @ v
 
     def __repr__(self):
         return f"LazyRandomQR({self.D}, {self.d}, seed={self.seed})"
