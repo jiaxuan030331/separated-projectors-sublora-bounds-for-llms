@@ -3,7 +3,7 @@
 #SBATCH --account=ds_ga_1006-2025fa
 #SBATCH --partition=c12m85-a100-1
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --output=/scratch/%u/sublora-logs/%x_%j.out
