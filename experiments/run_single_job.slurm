@@ -33,6 +33,18 @@ RATIO=${RATIO:-0.5}
 SEED=${SEED:-42}
 WANDB_DISABLED=${WANDB_DISABLED:-false}  # Set to 'true' to disable wandb logging
 
+# ============================================================
+# Training hyperparameters - scaled relative to d=1000, 10K iters baseline
+# ============================================================
+MAX_ITERS=${MAX_ITERS:-10000}
+# Warmup: 5% of total training
+WARMUP_ITERS=$((MAX_ITERS / 20))
+# LR decay matches total training length proportion
+LR_DECAY_ITERS=$MAX_ITERS
+# Base LR and min LR (min = 10% of base)
+BASE_LR="5e-3"
+MIN_LR="5e-4"
+
 # Build experiment name based on mode
 if [[ "$MODE" == "fixed" ]]; then
     if [[ "$RATIO" == "0.8" ]]; then
@@ -140,7 +152,11 @@ singularity exec --nv \
             --training.gradient_accumulation_steps=5 \
             --training.eval_interval=100 \
             --training.log_interval=10 \
-            --training.max_iters=10000 \
+            --training.max_iters=$MAX_ITERS \
+            --optimizer.learning_rate=$BASE_LR \
+            --learning_rate.warmup_iters=$WARMUP_ITERS \
+            --learning_rate.lr_decay_iters=$LR_DECAY_ITERS \
+            --learning_rate.min_lr=$MIN_LR \
             \$WANDB_FLAG \
             $RESUME_FLAG
     "
