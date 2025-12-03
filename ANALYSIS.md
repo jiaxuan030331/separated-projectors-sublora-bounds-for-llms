@@ -29,38 +29,48 @@ The analysis pipeline (`experiments/analyze_results.py`) performs:
 
 ## Data Flow
 
+The analysis script handles the **nested directory structure** from HPC training:
+
 ```
-Experiment Folders                      Analysis Script
-──────────────────                      ───────────────
+Experiment Folders (HPC structure)              Analysis Script
+──────────────────────────────────              ───────────────
 sublora-d1000-uniform-seed42/
-  └─ out/
-     ├─ best_ckpt.pt ──────────────┐
-     ├─ quant_ckpt_levels*.pt ─────┼──> extract_bounds_metrics()
-     ├─ bounds_levels*.yml ────────┤      │
-     └─ metrics_levels*.yml ───────┘      │
-                                          ↓
-sublora-d1000-learned-seed42/        ┌─────────────────────┐
-  └─ out/                            │ DataFrame with:     │
-     ├─ best_ckpt.pt ──────────────┬─│ - val_loss          │
-     │  (contains gating_params)   │ │ - kl_divergence     │
-     └─ ...                        │ │ - empirical_bpd     │
-                                   │ │ - bound_value       │
-                                   │ │ - compressed_size   │
-          extract_learned_gating()<┘ │ - prefix_msg_len    │
-                   │                 └─────────────────────┘
-                   ↓
-          ┌─────────────────────┐
-          │ Gating γ values:    │
-          │ [γ_0, γ_1, ... γ_11]│
-          │ (12 layers)         │
-          └─────────────────────┘
+└── out/
+    └── SubLoRA_Pretrain/
+        └── id1000_lr0.005_r4/
+            └── 2025-12-02/
+                └── 02-54/                      
+                    ├── best_ckpt.pt ──────────┐
+                    ├── quant_ckpt_levels*.pt ─┼──→ extract_bounds_metrics()
+                    ├── bounds_levels*.yml ────┤        │
+                    └── metrics_levels*.yml ───┘        │
+                                                        ↓
+sublora-d1000-learned-seed42/                  ┌─────────────────────┐
+└── out/                                       │ DataFrame with:     │
+    └── SubLoRA_Pretrain/                      │ - val_loss          │
+        └── id1000_lr0.005_r4/                 │ - kl_divergence     │
+            └── {date}/{time}/                 │ - empirical_bpd     │
+                ├── best_ckpt.pt ──────────┬───│ - bound_value       │
+                │   (contains gating_params)│  │ - compressed_size   │
+                └── ...                     │  │ - prefix_msg_len    │
+                                            │  └─────────────────────┘
+                   extract_learned_gating() ←┘
+                            │
+                            ↓
+                   ┌─────────────────────┐
+                   │ Gating γ values:    │
+                   │ [γ_0, γ_1, ... γ_11]│
+                   │ (12 layers)         │
+                   └─────────────────────┘
 ```
+
+**Note**: The helper functions (`find_best_checkpoint`, `find_quant_checkpoint`, `find_bounds_yaml`, `find_metrics_yaml`) automatically search through the nested `SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/` structure to find the most recent files.
 
 ---
 
 ## Running the Analysis
 
-### Basic Usage
+### Basic Usage (Local experiments)
 
 ```bash
 python experiments/analyze_results.py \
@@ -70,13 +80,13 @@ python experiments/analyze_results.py \
     --seeds 42 123 999
 ```
 
-### With HPC Results Downloaded Locally
+### With Downloaded HPC Results
 
 ```powershell
-# After downloading from HPC
+# After downloading from HPC to sublora-experiments/hpc_out/
 python experiments/analyze_results.py `
-    --results_dir=.\sublora-experiments `
-    --output_dir=.\analysis_outputs `
+    --results_dir=sublora-experiments/hpc_out `
+    --output_dir=analysis_outputs `
     --budgets 1000 2000 `
     --seeds 42 123 999
 ```

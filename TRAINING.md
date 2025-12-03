@@ -113,6 +113,47 @@ mkdir -p /scratch/$USER/sublora-data
 mkdir -p /scratch/$USER/sublora-experiments
 ```
 
+### 2a. Using Another User's Setup (HPC_USER Configuration)
+
+The scripts support running jobs using a different user's pre-configured environment via the `HPC_USER` variable. This is useful when:
+- A team member has already set up the environment/data
+- You want to share resources across multiple users
+- You're debugging another user's experiments
+
+**What HPC_USER controls:**
+```
+/scratch/${HPC_USER}/
+├── sublora-repo/           # Code repository
+├── sublora-data/           # Training data (train.bin, val.bin, etc.)
+├── sublora_env.ext3        # Conda environment overlay
+├── sublora-experiments/    # Experiment outputs
+└── .wandb_api_key          # Optional: WandB API key
+```
+
+**Usage:**
+```bash
+# Method 1: Set environment variable before running submit script
+HPC_USER=sons01 ./experiments/submit_hpc_jobs.sh
+
+# Method 2: Export for session
+export HPC_USER=sons01
+./experiments/submit_hpc_jobs.sh
+./experiments/submit_bounds_jobs.sh
+
+# Method 3: Pass directly via sbatch --export
+sbatch --job-name=test --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42,HPC_USER=sons01 \
+       experiments/run_single_job.slurm
+```
+
+**Note:** You must have read access to the other user's `/scratch/` directory. Contact the user to set permissions:
+```bash
+# Run as the owner (sons01) to grant access
+chmod -R o+rX /scratch/sons01/sublora-repo
+chmod -R o+rX /scratch/sons01/sublora-data
+chmod o+r /scratch/sons01/sublora_env.ext3
+chmod -R o+rwX /scratch/sons01/sublora-experiments  # Write access for outputs
+```
+
 ### 2b. Upload Code from Local Machine
 
 Git is not available on burst nodes. Upload your local repo directly from Windows PowerShell:
@@ -150,18 +191,18 @@ scp -rp greene-dtn:/scratch/sons01/sublora-repo /scratch/sons01/
 │   └── doc_lengths.npy
 ├── sublora_env.ext3                 # Conda environment overlay
 └── sublora-experiments/             # Individual experiment folders
-    ├── sublora-d1000-uniform-seed42/
+    ├── sublora-d10000-uniform-seed42/
     │   ├── out/
     │   │   └── best_ckpt.pt
     │   ├── logs/
     │   │   ├── <job_id>.out
     │   │   └── <job_id>.err
     │   └── config/
-    ├── sublora-d1000-uniform-seed123/
-    ├── sublora-d1000-fixed-bheavy-seed42/
-    ├── sublora-d1000-learned-seed42/
-    ├── sublora-d2000-uniform-seed42/
-    └── ... (30 experiment folders total)
+    ├── sublora-d10000-uniform-seed123/
+    ├── sublora-d10000-fixed-bheavy-seed42/
+    ├── sublora-d10000-learned-seed42/
+    ├── sublora-d20000-uniform-seed42/
+    └── ... (experiment folders by config)
 ```
 
 ### 3. Set Up Conda Environment with Singularity Overlay
@@ -251,25 +292,45 @@ sublora-d{dim}-{mode}-seed{seed}
 ```
 
 Examples:
-- `sublora-d1000-uniform-seed42`
-- `sublora-d1000-fixed-bheavy-seed42`
-- `sublora-d2000-learned-seed999`
+- `sublora-d10000-uniform-seed42`
+- `sublora-d10000-fixed-bheavy-seed42`
+- `sublora-d20000-learned-seed42`
 
 ### Environment Variables
 
-The job script supports these environment variables:
-- `DIM` - Intrinsic dimension (1000 or 2000)
+The **submit script** (`submit_hpc_jobs.sh`) supports these environment variables:
+- `HPC_USER` - NetID whose `/scratch` space to use (default: `$USER`)
+- `SEEDS` - Space-separated seeds (default: `"42 123"`)
+- `DIMS` - Space-separated intrinsic dimensions (default: `"10000 20000"`)
+
+The **job script** (`run_single_job.slurm`) supports these environment variables:
+- `DIM` - Intrinsic dimension (e.g., 10000, 20000, 50000)
 - `MODE` - Allocation mode (uniform, fixed, learned)
 - `RATIO` - Allocation ratio for fixed mode (0.2, 0.5, 0.8)
-- `SEED` - Random seed (42, 123, 999)
+- `SEED` - Random seed (e.g., 42, 123, 999)
+- `HPC_USER` - NetID whose `/scratch` space to use (default: `$USER`)
 - `WANDB_DISABLED` - Set to `true` to disable wandb logging (default: `false`)
 
-### Option 1: Submit All 30 Jobs at Once
+### Option 1: Submit Jobs with Script
 
 ```bash
 cd /scratch/$USER/sublora-repo
 chmod +x experiments/submit_hpc_jobs.sh
+
+# Default: DIMS="10000 20000", SEEDS="42 123" (20 jobs)
 ./experiments/submit_hpc_jobs.sh
+
+# Custom seeds (single seed = 10 jobs)
+SEEDS="42" ./experiments/submit_hpc_jobs.sh
+
+# Custom dimensions
+DIMS="5000 10000" ./experiments/submit_hpc_jobs.sh
+
+# Use another user's setup
+HPC_USER=sons01 ./experiments/submit_hpc_jobs.sh
+
+# All custom
+DIMS="10000" SEEDS="42 123 999" HPC_USER=sons01 ./experiments/submit_hpc_jobs.sh
 ```
 
 ### Option 2: Submit Individual Jobs
@@ -277,33 +338,38 @@ chmod +x experiments/submit_hpc_jobs.sh
 Each job creates its own experiment folder automatically:
 
 ```bash
-# d=1000, uniform, seed=42 → creates sublora-d1000-uniform-seed42/
-sbatch --job-name=sublora-d1000-uniform-seed42 \
-       --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 \
+# d=10000, uniform, seed=42 → creates sublora-d10000-uniform-seed42/
+sbatch --job-name=sublora-d10000-uniform-seed42 \
+       --export=DIM=10000,MODE=uniform,RATIO=0.5,SEED=42 \
        /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-# d=1000, fixed B-heavy, seed=42 → creates sublora-d1000-fixed-bheavy-seed42/
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed42 \
-       --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=42 \
+# d=10000, fixed B-heavy, seed=42 → creates sublora-d10000-fixed-bheavy-seed42/
+sbatch --job-name=sublora-d10000-fixed-bheavy-seed42 \
+       --export=DIM=10000,MODE=fixed,RATIO=0.8,SEED=42 \
        /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-# d=1000, fixed A-heavy, seed=123 → creates sublora-d1000-fixed-aheavy-seed123/
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed123 \
-       --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=123 \
+# Using another user's environment
+sbatch --job-name=sublora-d10000-uniform-seed42 \
+       --export=DIM=10000,MODE=uniform,RATIO=0.5,SEED=42,HPC_USER=sons01 \
+       /scratch/sons01/sublora-repo/experiments/run_single_job.slurm
+
+# d=10000, fixed A-heavy, seed=123 → creates sublora-d10000-fixed-aheavy-seed123/
+sbatch --job-name=sublora-d10000-fixed-aheavy-seed123 \
+       --export=DIM=10000,MODE=fixed,RATIO=0.2,SEED=123 \
        /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-# d=1000, learned, seed=42 → creates sublora-d1000-learned-seed42/
-sbatch --job-name=sublora-d1000-learned-seed42 \
-       --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=42 \
+# d=20000, learned, seed=42 → creates sublora-d20000-learned-seed42/
+sbatch --job-name=sublora-d20000-learned-seed42 \
+       --export=DIM=20000,MODE=learned,RATIO=0.5,SEED=42 \
        /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-# d=2000, uniform, seed=999 → creates sublora-d2000-uniform-seed999/
-sbatch --job-name=sublora-d2000-uniform-seed999 \
-       --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=999 \
+# d=20000, uniform, seed=999 → creates sublora-d20000-uniform-seed999/
+sbatch --job-name=sublora-d20000-uniform-seed999 \
+       --export=DIM=20000,MODE=uniform,RATIO=0.5,SEED=999 \
        /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 ```
 
-### Complete List of All 30 Experiment Commands
+### Example Commands for d=10000 and d=20000
 
 **Note:** If you get "DOS line breaks" error, first run:
 ```bash
@@ -312,138 +378,62 @@ sed -i 's/\r$//' /scratch/$USER/sublora-repo/experiments/submit_hpc_jobs.sh
 ```
 
 ```bash
-# ============== d=1000 Experiments ==============
+# ============== d=10000 Experiments ==============
 
 # Uniform (baseline)
-sbatch --job-name=sublora-d1000-uniform-seed42 \
-    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=42 \
+sbatch --job-name=sublora-d10000-uniform-seed42 \
+    --export=DIM=10000,MODE=uniform,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-sbatch --job-name=sublora-d1000-uniform-seed123 \
-    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-uniform-seed999 \
-    --export=DIM=1000,MODE=uniform,RATIO=0.5,SEED=999 \
+sbatch --job-name=sublora-d10000-uniform-seed123 \
+    --export=DIM=10000,MODE=uniform,RATIO=0.5,SEED=123 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed B-heavy (ratio=0.8)
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed42 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed123 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-bheavy-seed999 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.8,SEED=999 \
+sbatch --job-name=sublora-d10000-fixed-bheavy-seed42 \
+    --export=DIM=10000,MODE=fixed,RATIO=0.8,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed Equal (ratio=0.5)
-sbatch --job-name=sublora-d1000-fixed-equal-seed42 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-equal-seed123 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-equal-seed999 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.5,SEED=999 \
+sbatch --job-name=sublora-d10000-fixed-equal-seed42 \
+    --export=DIM=10000,MODE=fixed,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed A-heavy (ratio=0.2)
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed42 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed123 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-fixed-aheavy-seed999 \
-    --export=DIM=1000,MODE=fixed,RATIO=0.2,SEED=999 \
+sbatch --job-name=sublora-d10000-fixed-aheavy-seed42 \
+    --export=DIM=10000,MODE=fixed,RATIO=0.2,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Learned
-sbatch --job-name=sublora-d1000-learned-seed42 \
-    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=42 \
+sbatch --job-name=sublora-d10000-learned-seed42 \
+    --export=DIM=10000,MODE=learned,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
-sbatch --job-name=sublora-d1000-learned-seed123 \
-    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d1000-learned-seed999 \
-    --export=DIM=1000,MODE=learned,RATIO=0.5,SEED=999 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-# ============== d=2000 Experiments ==============
+# ============== d=20000 Experiments ==============
 
 # Uniform (baseline)
-sbatch --job-name=sublora-d2000-uniform-seed42 \
-    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-uniform-seed123 \
-    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-uniform-seed999 \
-    --export=DIM=2000,MODE=uniform,RATIO=0.5,SEED=999 \
+sbatch --job-name=sublora-d20000-uniform-seed42 \
+    --export=DIM=20000,MODE=uniform,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed B-heavy (ratio=0.8)
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed42 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed123 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-bheavy-seed999 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.8,SEED=999 \
+sbatch --job-name=sublora-d20000-fixed-bheavy-seed42 \
+    --export=DIM=20000,MODE=fixed,RATIO=0.8,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed Equal (ratio=0.5)
-sbatch --job-name=sublora-d2000-fixed-equal-seed42 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-equal-seed123 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-equal-seed999 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.5,SEED=999 \
+sbatch --job-name=sublora-d20000-fixed-equal-seed42 \
+    --export=DIM=20000,MODE=fixed,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Fixed A-heavy (ratio=0.2)
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed42 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed123 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-fixed-aheavy-seed999 \
-    --export=DIM=2000,MODE=fixed,RATIO=0.2,SEED=999 \
+sbatch --job-name=sublora-d20000-fixed-aheavy-seed42 \
+    --export=DIM=20000,MODE=fixed,RATIO=0.2,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 
 # Learned
-sbatch --job-name=sublora-d2000-learned-seed42 \
-    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=42 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-learned-seed123 \
-    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=123 \
-    /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
-
-sbatch --job-name=sublora-d2000-learned-seed999 \
-    --export=DIM=2000,MODE=learned,RATIO=0.5,SEED=999 \
+sbatch --job-name=sublora-d20000-learned-seed42 \
+    --export=DIM=20000,MODE=learned,RATIO=0.5,SEED=42 \
     /scratch/$USER/sublora-repo/experiments/run_single_job.slurm
 ```
 
@@ -568,7 +558,7 @@ Each experiment gets its own self-contained folder:
 scp -rp <NetID>@greene-dtn.hpc.nyu.edu:/scratch/<NetID>/sublora-experiments/sublora-d1000-uniform-seed42 .\experiments\
 
 # Download just the checkpoint
-scp <NetID>@greene-dtn.hpc.nyu.edu:/scratch/<NetID>/sublora-experiments/sublora-d1000-uniform-seed42/out/best_ckpt.pt .\checkpoints\
+scp <NetID>@greene-dtn.hpc.nyu.edu:/scratch/<NetID>/sublora-experiments/sublora-d10000-uniform-seed42/out/best_ckpt.pt .\checkpoints\
 ```
 
 ### Download All Experiments

@@ -47,12 +47,64 @@ The bounds evaluation phase:
 
 ---
 
+## Directory Structure
+
+Training creates a **nested directory structure** with timestamps:
+
+```
+/scratch/${HPC_USER}/sublora-experiments/
+└── sublora-d{dim}-{mode}-seed{seed}/           # e.g., sublora-d1000-uniform-seed42
+    ├── config/
+    │   └── sublora_train.yaml
+    ├── logs/
+    │   ├── <training_job_id>.out
+    │   └── <training_job_id>.err
+    └── out/
+        └── SubLoRA_Pretrain/
+            └── id{dim}_lr0.005_r4/             # e.g., id1000_lr0.005_r4
+                └── {date}/                      # e.g., 2025-12-02
+                    └── {time}/                  # e.g., 02-54
+                        ├── best_ckpt.pt         ← INPUT: trained checkpoint
+                        ├── ckpt_at_random_initialization.pt
+                        ├── trainable_initparams.pt
+                        ├── names.pt
+                        │
+                        │ After bounds evaluation:
+                        ├── quant_ckpt_levels11_iters100.pt   ← OUTPUT
+                        ├── bounds_levels11_iters100.yml      ← OUTPUT
+                        ├── metrics_levels11_iters100.yml     ← OUTPUT
+                        ├── ix_levels11_iters100.txt
+                        ├── top_k_indices_levels11_iters100.txt
+                        ├── selected_prob_scores_levels11_iters100.txt
+                        └── percentile_vec_levels11_iters100.txt
+```
+
+---
+
+## HPC_USER Configuration
+
+The bounds evaluation scripts support the `HPC_USER` variable to use another user's pre-configured environment and data. See [HPC_TRAINING.md](./HPC_TRAINING.md#2a-using-another-users-setup-hpc_user-configuration) for full details.
+
+```bash
+# Submit bounds jobs using another user's setup
+HPC_USER=sons01 ./experiments/submit_bounds_jobs.sh
+
+# Or pass via sbatch --export
+sbatch --job-name=bounds-test \
+       --export=CHECKPOINT_DIR=/scratch/sons01/...,HPC_USER=sons01 \
+       experiments/run_bounds_job.slurm
+```
+
+**Important**: The `CHECKPOINT_DIR` for bounds evaluation should point to the **innermost timestamp folder** containing `best_ckpt.pt`, NOT the top-level experiment folder.
+
+---
+
 ## Prerequisites
 
 Before running bounds evaluation:
 
-1. **Training must be complete**: Ensure `best_ckpt.pt` exists in each experiment folder
-2. **Data files required**:
+1. **Training must be complete**: Ensure `best_ckpt.pt` exists in the timestamp folder
+2. **Data files required** (in `/scratch/$USER/sublora-data/`):
    - `train.bin` - Training data
    - `val.bin` - Validation data  
    - `eot_indices.npy` - End-of-text token positions
@@ -60,153 +112,92 @@ Before running bounds evaluation:
 
 ---
 
-## SLURM Job Script
-
-Create `/scratch/$USER/sublora-repo/experiments/run_bounds_job.slurm`:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=sublora-bounds
-#SBATCH --account=ds_ga_1006-2025fa
-#SBATCH --partition=c12m85-a100-1
-#SBATCH --gres=gpu
-#SBATCH --time=02:00:00
-#SBATCH --mem=64G
-#SBATCH --cpus-per-task=8
-#SBATCH --output=/scratch/%u/sublora-experiments/%x/logs/%j.out
-#SBATCH --error=/scratch/%u/sublora-experiments/%x/logs/%j.err
-#SBATCH --requeue
-
-# === Environment Variables (passed via --export) ===
-# CHECKPOINT_DIR: Full path to experiment directory with best_ckpt.pt
-
-echo "=========================================="
-echo "Job ID: $SLURM_JOB_ID"
-echo "Node: $SLURM_NODELIST"
-echo "Started: $(date)"
-echo "Checkpoint Dir: ${CHECKPOINT_DIR}"
-echo "=========================================="
-
-# Set paths
-REPO_DIR=/scratch/$USER/sublora-repo
-DATA_DIR=/scratch/$USER/sublora-data
-OVERLAY=/scratch/$USER/sublora_env.ext3
-
-# Create logs directory
-mkdir -p ${CHECKPOINT_DIR}/logs
-
-# Set wandb API key if available
-if [ -f /scratch/$USER/.wandb_api_key ]; then
-    export WANDB_API_KEY=$(cat /scratch/$USER/.wandb_api_key)
-fi
-
-# Run bounds evaluation
-singularity exec --nv \
-    --overlay ${OVERLAY}:ro \
-    --bind /scratch:/scratch \
-    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
-    /bin/bash -c "
-        source /ext3/env.sh
-        conda activate sublora
-        cd ${REPO_DIR}
-        
-        python experiments/eval_bounds.py \
-            --config-file=config/sublora_bounds.yaml \
-            --data.dataset_dir=${DATA_DIR} \
-            --model.best_checkpoint_path=${CHECKPOINT_DIR}/out \
-            --bounds.bound_type=document_level \
-            --bounds.levels=11 \
-            --bounds.bound_samples=10000 \
-            --bounds.max_quant_iters=100 \
-            --bounds.use_kmeans=True \
-            --data.openwebtext_train_eot_indices_file=${DATA_DIR}/eot_indices.npy \
-            --data.empirical_document_length_distribution_file=${DATA_DIR}/doc_lengths.npy
-    "
-
-echo "=========================================="
-echo "Completed: $(date)"
-echo "=========================================="
-```
-
----
-
 ## Submitting Bounds Evaluation Jobs
 
-### Option 1: Submit All 30 Jobs
+### Option 1: Submit All 30 Jobs (Recommended)
 
-Create `submit_bounds_jobs.sh`:
+Use the `submit_bounds_jobs.sh` script which automatically finds the latest checkpoint for each experiment:
 
 ```bash
-#!/bin/bash
-# Submit bounds evaluation for all completed training runs
-
-EXPERIMENTS_DIR=/scratch/$USER/sublora-experiments
-SLURM_SCRIPT=/scratch/$USER/sublora-repo/experiments/run_bounds_job.slurm
-
-for exp_dir in ${EXPERIMENTS_DIR}/sublora-d*; do
-    if [ -d "$exp_dir" ]; then
-        exp_name=$(basename $exp_dir)
-        
-        # Check if training is complete (best_ckpt.pt exists)
-        if [ -f "$exp_dir/out/best_ckpt.pt" ]; then
-            # Check if bounds already computed
-            if [ ! -f "$exp_dir/out/bounds_levels11_iters100.yml" ]; then
-                echo "Submitting bounds evaluation for: $exp_name"
-                sbatch --job-name=bounds-${exp_name} \
-                       --export=CHECKPOINT_DIR=${exp_dir} \
-                       ${SLURM_SCRIPT}
-            else
-                echo "Skipping $exp_name (bounds already computed)"
-            fi
-        else
-            echo "Skipping $exp_name (training not complete)"
-        fi
-    fi
-done
-```
-
-Run with:
-```bash
+cd /scratch/$USER/sublora-repo/experiments
 chmod +x submit_bounds_jobs.sh
 ./submit_bounds_jobs.sh
 ```
 
+The script:
+1. Iterates through all `sublora-d*` experiment folders
+2. Finds the most recent timestamp folder with `best_ckpt.pt`
+3. Skips experiments where bounds are already computed
+4. Submits SLURM jobs for remaining experiments
+
 ### Option 2: Submit Individual Jobs
 
+First, find the checkpoint path:
 ```bash
-# Example: Submit bounds for d=1000 uniform seed=42
-sbatch --job-name=bounds-sublora-d1000-uniform-seed42 \
-       --export=CHECKPOINT_DIR=/scratch/$USER/sublora-experiments/sublora-d1000-uniform-seed42 \
-       /scratch/$USER/sublora-repo/experiments/run_bounds_job.slurm
+# Find the latest checkpoint for a specific experiment
+exp_name="sublora-d1000-uniform-seed42"
+d_num=1000
+base_path="/scratch/$USER/sublora-experiments/${exp_name}/out/SubLoRA_Pretrain/id${d_num}_lr0.005_r4"
+ckpt_dir=$(ls -d ${base_path}/*/* 2>/dev/null | sort -r | head -1)
+echo "Checkpoint dir: ${ckpt_dir}"
+```
 
-# Example: Submit bounds for d=2000 learned seed=999
-sbatch --job-name=bounds-sublora-d2000-learned-seed999 \
-       --export=CHECKPOINT_DIR=/scratch/$USER/sublora-experiments/sublora-d2000-learned-seed999 \
+Then submit:
+```bash
+sbatch --job-name=bounds-sublora-d1000-uniform-seed42 \
+       --export=CHECKPOINT_DIR=${ckpt_dir} \
        /scratch/$USER/sublora-repo/experiments/run_bounds_job.slurm
 ```
+
+### Example Commands for All Experiments
+
+```bash
+# d=1000 experiments
+sbatch --job-name=bounds-d1000-uniform-s42 \
+    --export=CHECKPOINT_DIR=/scratch/$USER/sublora-experiments/sublora-d1000-uniform-seed42/out/SubLoRA_Pretrain/id1000_lr0.005_r4/2025-12-02/02-54 \
+    /scratch/$USER/sublora-repo/experiments/run_bounds_job.slurm
+
+# Repeat for other experiments, adjusting the timestamp path as needed
+```
+
+---
+
+## Local Testing (Windows)
+
+To test bounds evaluation locally before running on HPC:
+
+```powershell
+# Quick test with minimal samples (for debugging)
+python experiments/eval_bounds.py `
+    --config-file=config/sublora_bounds.yaml `
+    --data.dataset_dir=data/openwebtext `
+    --data.openwebtext_train_eot_indices_file=data/openwebtext/eot_indices.npy `
+    --data.empirical_document_length_distribution_file=data/openwebtext/doc_lengths.npy `
+    --model.best_checkpoint_path="sublora-experiments/hpc_out/sublora-d1000-fixed-bheavy-seed42/out/SubLoRA_Pretrain/id1000_lr0.005_r4/2025-12-02/02-54" `
+    --bounds.bound_samples=10 `
+    --bounds.max_quant_iters=5 `
+    --bounds.levels=3 `
+    --login.wandb_log=False
+```
+
+**Note**: For downloaded HPC results, the checkpoint path includes the full nested structure.
 
 ---
 
 ## Output Files
 
-After bounds evaluation, each experiment folder will contain:
+After bounds evaluation, files are written to the **same directory** as `best_ckpt.pt`:
 
 ```
-/scratch/$USER/sublora-experiments/sublora-d1000-uniform-seed42/
-├── out/
-│   ├── best_ckpt.pt                           # From training
-│   ├── quant_ckpt_levels11_iters100.pt        # Quantized checkpoint
-│   ├── bounds_levels11_iters100.yml           # PAC-Bayes bounds
-│   ├── metrics_levels11_iters100.yml          # Empirical metrics
-│   ├── ix_levels11_iters100.txt               # Sampled document indices
-│   ├── top_k_indices_levels11_iters100.txt    # Top-k predictions
-│   ├── selected_prob_scores_levels11_iters100.txt
-│   └── percentile_vec_levels11_iters100.txt
-└── logs/
-    ├── <training_job_id>.out
-    ├── <training_job_id>.err
-    ├── <bounds_job_id>.out                    # Bounds evaluation log
-    └── <bounds_job_id>.err
+.../id1000_lr0.005_r4/2025-12-02/02-54/
+├── best_ckpt.pt                               # From training
+├── quant_ckpt_levels11_iters100.pt            # Quantized checkpoint
+├── bounds_levels11_iters100.yml               # PAC-Bayes bounds
+├── metrics_levels11_iters100.yml              # Empirical metrics
+├── ix_levels11_iters100.txt                   # Sampled document indices
+├── top_k_indices_levels11_iters100.txt        # Top-k predictions
+├── selected_prob_scores_levels11_iters100.txt
+└── percentile_vec_levels11_iters100.txt
 ```
 
 ### Key Output Files Explained
@@ -251,19 +242,26 @@ top_10_acc: 0.823                     # Top-10 token accuracy
 # Check job queue
 squeue -u $USER
 
-# Watch bounds evaluation progress
-tail -f /scratch/$USER/sublora-experiments/sublora-d1000-uniform-seed42/logs/<job_id>.out
+# Watch bounds evaluation progress (find the log file first)
+exp_name="sublora-d1000-uniform-seed42"
+tail -f /scratch/$USER/sublora-experiments/${exp_name}/logs/*.out
 
 # Check which experiments have bounds computed
-ls /scratch/$USER/sublora-experiments/*/out/bounds_levels11_iters100.yml | wc -l
-# Should show 30 when all complete
-
-# List experiments missing bounds
-for d in /scratch/$USER/sublora-experiments/sublora-d*/; do
-    if [ ! -f "$d/out/bounds_levels11_iters100.yml" ]; then
-        echo "Missing bounds: $(basename $d)"
+for exp in /scratch/$USER/sublora-experiments/sublora-d*/; do
+    exp_name=$(basename "$exp")
+    d_num=$(echo "${exp_name}" | grep -oP '(?<=-d)\d+')
+    base_path="${exp}/out/SubLoRA_Pretrain/id${d_num}_lr0.005_r4"
+    ckpt_dir=$(ls -d ${base_path}/*/* 2>/dev/null | sort -r | head -1)
+    if [ -f "${ckpt_dir}/bounds_levels11_iters100.yml" ]; then
+        echo "✓ ${exp_name}"
+    else
+        echo "✗ ${exp_name} (missing bounds)"
     fi
 done
+
+# Count completed bounds evaluations
+find /scratch/$USER/sublora-experiments -name "bounds_levels11_iters100.yml" | wc -l
+# Should show 30 when all complete
 ```
 
 ---

@@ -41,15 +41,23 @@ def find_bounds_yaml(exp_dir):
     Output structure from get_bounds():
         bounds_levels{levels}_iters{max_quant_iters}.yml
         metrics_levels{levels}_iters{max_quant_iters}.yml
+    
+    HPC directory structure:
+        sublora-d{dim}-{mode}-seed{seed}/
+        └── out/SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/
+            └── bounds_levels*.yml
     """
-    # Search patterns for bounds files
+    # Search patterns for bounds files (most specific to least specific)
     search_patterns = [
-        # Direct in exp_dir
-        str(exp_dir / 'bounds_levels*.yml'),
-        str(exp_dir / 'out' / 'bounds_levels*.yml'),
-        # Nested in SubLoRA output structure
+        # HPC nested structure: out/SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'bounds_levels*.yml'),
+        # Alternative nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'bounds_levels*.yml'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'bounds_levels*.yml'),
+        # Direct in out folder
+        str(exp_dir / 'out' / 'bounds_levels*.yml'),
+        # Direct in exp_dir
+        str(exp_dir / 'bounds_levels*.yml'),
     ]
     
     for pattern in search_patterns:
@@ -66,10 +74,12 @@ def find_metrics_yaml(exp_dir):
     Find metrics YAML file in experiment directory.
     """
     search_patterns = [
-        str(exp_dir / 'metrics_levels*.yml'),
-        str(exp_dir / 'out' / 'metrics_levels*.yml'),
+        # HPC nested structure
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'metrics_levels*.yml'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'metrics_levels*.yml'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'metrics_levels*.yml'),
+        str(exp_dir / 'metrics_levels*.yml'),
     ]
     
     for pattern in search_patterns:
@@ -86,10 +96,12 @@ def find_quant_checkpoint(exp_dir):
     This contains prefix_message_len from quantization.
     """
     search_patterns = [
-        str(exp_dir / 'quant_ckpt_levels*.pt'),
-        str(exp_dir / 'out' / 'quant_ckpt_levels*.pt'),
+        # HPC nested structure
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'quant_ckpt_levels*.pt'),
     ]
     
     for pattern in search_patterns:
@@ -103,12 +115,19 @@ def find_quant_checkpoint(exp_dir):
 def find_best_checkpoint(exp_dir):
     """
     Find best_ckpt.pt in experiment directory, handling nested structure.
+    
+    HPC directory structure:
+        sublora-d{dim}-{mode}-seed{seed}/
+        └── out/SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/
+            └── best_ckpt.pt
     """
     search_patterns = [
-        str(exp_dir / 'best_ckpt.pt'),
-        str(exp_dir / 'out' / 'best_ckpt.pt'),
+        # HPC nested structure
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'best_ckpt.pt'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'best_ckpt.pt'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'best_ckpt.pt'),
+        str(exp_dir / 'best_ckpt.pt'),
     ]
     
     for pattern in search_patterns:
