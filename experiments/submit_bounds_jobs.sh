@@ -13,8 +13,21 @@
 # Usage:
 #   ./submit_bounds_jobs.sh                    # Uses current user
 #   HPC_USER=netid ./submit_bounds_jobs.sh     # Uses specified user's setup
+#   SEEDS="42 123" ./submit_bounds_jobs.sh     # Custom seeds
+#   DIMS="10000 20000" ./submit_bounds_jobs.sh # Custom dimensions
 # ============================================================
 HPC_USER=${HPC_USER:-$USER}
+
+# Seeds for experiments (space-separated, override via environment variable)
+SEEDS_STR=${SEEDS:-"42 123"}
+read -ra SEEDS <<< "$SEEDS_STR"
+
+# Intrinsic dimensions (space-separated, override via environment variable)
+DIMS=${DIMS:-"10000 20000"}
+read -ra DIMS_ARR <<< "$DIMS"
+
+LOW_DIM=${DIMS_ARR[0]}
+HIGH_DIM=${DIMS_ARR[1]}
 
 ACCOUNT="ds_ga_1006-2025fa"
 PARTITION="c12m85-a100-1"
@@ -25,25 +38,31 @@ REPO_DIR="/scratch/${HPC_USER}/sublora-repo"
 EXPERIMENTS_DIR=/scratch/${HPC_USER}/sublora-experiments
 SLURM_SCRIPT=/scratch/${HPC_USER}/sublora-repo/experiments/run_bounds_job.slurm
 
+# Array of configurations: "intrinsic_dim,allocation_mode,allocation_ratio,mode_name"
 CONFIGS=(
-    # d=1000 experiments
-    "1000,uniform,0.5,uniform"
-    "1000,fixed,0.8,fixed-bheavy"
-    "1000,fixed,0.5,fixed-equal"
-    "1000,fixed,0.2,fixed-aheavy"
-    "1000,learned,0.5,learned"
-    # d=2000 experiments
-    "2000,uniform,0.5,uniform"
-    "2000,fixed,0.8,fixed-bheavy"
-    "2000,fixed,0.5,fixed-equal"
-    "2000,fixed,0.2,fixed-aheavy"
-    "2000,learned,0.5,learned"
+    # lower d experiments
+    "${LOW_DIM},uniform,0.5,uniform"
+    "${LOW_DIM},fixed,0.8,fixed-bheavy"
+    "${LOW_DIM},fixed,0.5,fixed-equal"
+    "${LOW_DIM},fixed,0.2,fixed-aheavy"
+    "${LOW_DIM},learned,0.5,learned"
+    # higher d experiments
+    "${HIGH_DIM},uniform,0.5,uniform"
+    "${HIGH_DIM},fixed,0.8,fixed-bheavy"
+    "${HIGH_DIM},fixed,0.5,fixed-equal"
+    "${HIGH_DIM},fixed,0.2,fixed-aheavy"
+    "${HIGH_DIM},learned,0.5,learned"
 )
 
-SEEDS=(42,123,999)
+num_configs=${#CONFIGS[@]}
+num_seeds=${#SEEDS[@]}
+total_jobs=$((num_configs * num_seeds))
 
 echo "============================================"
-echo "Submitting 30 SubLoRA evaluations"
+echo "Submitting ${total_jobs} SubLoRA bounds evaluations"
+echo "Using HPC_USER: ${HPC_USER}"
+echo "Seeds: ${SEEDS[*]}"
+echo "Dimensions: ${DIMS}"
 echo "============================================"
 
 for exp_dir in ${EXPERIMENTS_DIR}/sublora-d*; do
