@@ -2,6 +2,10 @@ out
 out/
 out/*
 
+sublora-experiments/hpc_out
+sublora-experiments/hpc_out/
+sublora-experiments/hpc_out/*
+
 experiments/out
 experiments/out/
 experiments/out/*

@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 import pandas as pd
+import yaml
+import glob
 from pathlib import Path
 from collections import defaultdict
 
@@ -31,74 +33,296 @@ def load_checkpoint(ckpt_path):
     return checkpoint
 
 
+def find_bounds_yaml(exp_dir):
+    """
+    Find bounds YAML file in experiment directory.
+    Handles the nested output structure from SubLoRA training.
+    
+    Output structure from get_bounds():
+        bounds_levels{levels}_iters{max_quant_iters}.yml
+        metrics_levels{levels}_iters{max_quant_iters}.yml
+    """
+    # Search patterns for bounds files
+    search_patterns = [
+        # Direct in exp_dir
+        str(exp_dir / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / 'bounds_levels*.yml'),
+        # Nested in SubLoRA output structure
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'bounds_levels*.yml'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            # Return the most recent file if multiple exist
+            return sorted(matches)[-1]
+    
+    return None
+
+
+def find_metrics_yaml(exp_dir):
+    """
+    Find metrics YAML file in experiment directory.
+    """
+    search_patterns = [
+        str(exp_dir / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'metrics_levels*.yml'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return sorted(matches)[-1]
+    
+    return None
+
+
+def find_quant_checkpoint(exp_dir):
+    """
+    Find quant_ckpt_levels*.pt file in experiment directory.
+    This contains prefix_message_len from quantization.
+    """
+    search_patterns = [
+        str(exp_dir / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return sorted(matches)[-1]
+    
+    return None
+
+
+def find_best_checkpoint(exp_dir):
+    """
+    Find best_ckpt.pt in experiment directory, handling nested structure.
+    """
+    search_patterns = [
+        str(exp_dir / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'best_ckpt.pt'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return sorted(matches)[-1]
+    
+    return None
+
+
 def extract_bounds_metrics(results_dir):
     """
     Extract bounds metrics from all experiment runs.
+    
+    Primary sources (PT files - more authoritative):
+    - best_ckpt.pt: Contains best_val_loss, model config, training state
+    - quant_ckpt_levels{X}_iters{Y}.pt: Contains prefix_message_len after quantization
+    
+    Secondary sources (YAML files - for computed bounds):
+    - bounds_levels{X}_iters{Y}.yml: Contains computed PAC-Bayes bounds
+    - metrics_levels{X}_iters{Y}.yml: Contains empirical metrics (bpd, accuracy)
 
     Returns:
         pd.DataFrame with columns: config, seed, budget, mode, ratio,
-                                   kl_divergence, empirical_bpd, bound_value
+                                   kl_divergence, empirical_bpd, bound_value, val_loss
     """
     results = []
 
-    # Expected directory structure: results_dir/d{budget}_{mode}_{detail}_seed{seed}/
+    # Expected directory structure: results_dir/sublora-d{budget}-{mode}-seed{seed}/
     for exp_dir in Path(results_dir).iterdir():
         if not exp_dir.is_dir():
             continue
 
         # Parse directory name
         name = exp_dir.name
-        parts = name.split('_')
-
+        
         try:
-            # Extract budget
-            if name.startswith('d1000'):
+            # Handle naming convention: sublora-d{dim}-{mode}-seed{seed}
+            # Example: sublora-d1000-uniform-seed42, sublora-d1000-fixed-bheavy-seed42
+            
+            # Extract budget (intrinsic dimension)
+            if 'd1000' in name or 'dim1000' in name:
+                budget = 1000
+            elif 'd2000' in name or 'dim2000' in name:
+                budget = 2000
+            elif name.startswith('d1000'):
                 budget = 1000
             elif name.startswith('d2000'):
                 budget = 2000
             else:
-                continue
+                # Try to extract from parts
+                parts = name.replace('-', '_').split('_')
+                budget = None
+                for p in parts:
+                    if p.startswith('d') and p[1:].isdigit():
+                        budget = int(p[1:])
+                        break
+                if budget is None:
+                    continue
 
             # Extract seed
-            seed = int(parts[-1].replace('seed', ''))
+            seed = None
+            if 'seed' in name:
+                seed_part = name.split('seed')[-1].split('-')[0].split('_')[0]
+                seed = int(''.join(filter(str.isdigit, seed_part)))
+            else:
+                parts = name.replace('-', '_').split('_')
+                for p in parts:
+                    if p.isdigit():
+                        seed = int(p)
+                        break
+            
+            if seed is None:
+                seed = 0  # Default seed
 
-            # Extract mode
-            if 'uniform' in name:
+            # Extract mode and ratio
+            name_lower = name.lower()
+            if 'uniform' in name_lower:
                 mode = 'uniform'
                 ratio = 0.5
-            elif 'learned' in name:
+            elif 'learned' in name_lower:
                 mode = 'learned'
                 ratio = None  # adaptive
-            elif 'bheavy' in name:
+            elif 'bheavy' in name_lower:
                 mode = 'fixed_bheavy'
                 ratio = 0.8
-            elif 'aheavy' in name:
+            elif 'aheavy' in name_lower:
                 mode = 'fixed_aheavy'
                 ratio = 0.2
-            elif 'equal' in name:
+            elif 'equal' in name_lower:
+                mode = 'fixed_equal'
+                ratio = 0.5
+            elif 'fixed' in name_lower:
                 mode = 'fixed_equal'
                 ratio = 0.5
             else:
                 continue
 
-            # Load metrics (assuming they're saved during bounds evaluation)
-            metrics_file = exp_dir / 'bounds_metrics.pt'
-            if metrics_file.exists():
-                metrics = torch.load(metrics_file)
+            # Initialize metrics
+            val_loss = np.nan
+            train_loss = np.nan
+            prefix_message_len = 0
+            kl_divergence = np.nan
+            bound_value = np.nan
+            empirical_bpd = np.nan
+            compressed_size_bits = 0
+            intrinsic_dim_from_config = budget
+            
+            # === PRIMARY SOURCE 1: best_ckpt.pt ===
+            best_ckpt_path = find_best_checkpoint(exp_dir)
+            if best_ckpt_path and os.path.exists(best_ckpt_path):
+                try:
+                    ckpt = torch.load(best_ckpt_path, map_location='cpu')
+                    val_loss = ckpt.get('best_val_loss', np.nan)
+                    if val_loss is not None:
+                        val_loss = float(val_loss)
+                    else:
+                        val_loss = np.nan
+                    
+                    # Extract config info if available
+                    config = ckpt.get('config', {})
+                    if isinstance(config, dict):
+                        intrinsic_dim_from_config = config.get('intrinsic_dim', budget)
+                    
+                    print(f"  Loaded best_ckpt.pt: val_loss={val_loss:.4f}" if not np.isnan(val_loss) else f"  Loaded best_ckpt.pt (no val_loss)")
+                except Exception as e:
+                    print(f"  Warning: Could not load best_ckpt.pt: {e}")
+            
+            # === PRIMARY SOURCE 2: quant_ckpt.pt (has prefix_message_len) ===
+            quant_ckpt_path = find_quant_checkpoint(exp_dir)
+            if quant_ckpt_path and os.path.exists(quant_ckpt_path):
+                try:
+                    quant_ckpt = torch.load(quant_ckpt_path, map_location='cpu')
+                    prefix_message_len = quant_ckpt.get('prefix_message_len', 0)
+                    if prefix_message_len:
+                        prefix_message_len = float(prefix_message_len)
+                        compressed_size_bits = prefix_message_len
+                        # KL divergence = prefix_message_len * log(2) to convert bits to nats
+                        kl_divergence = prefix_message_len * np.log(2)
+                    print(f"  Loaded quant_ckpt.pt: prefix_message_len={prefix_message_len:.2f} bits")
+                except Exception as e:
+                    print(f"  Warning: Could not load quant_ckpt.pt: {e}")
+            
+            # === SECONDARY SOURCE: bounds YAML (computed PAC-Bayes bounds) ===
+            bounds_file = find_bounds_yaml(exp_dir)
+            if bounds_file and os.path.exists(bounds_file):
+                try:
+                    with open(bounds_file, 'r') as f:
+                        bounds_data = yaml.safe_load(f)
+                    
+                    # Get prefix_message_len if not already loaded from PT
+                    if prefix_message_len == 0:
+                        prefix_message_len = bounds_data.get('prefix_message_len', 0)
+                        compressed_size_bits = prefix_message_len
+                    
+                    # Get divergence (may include misc_extra_bits adjustment)
+                    if np.isnan(kl_divergence):
+                        kl_divergence = bounds_data.get('bpd_divergence', 
+                                                        bounds_data.get('acc_divergence', 
+                                                        prefix_message_len * np.log(2)))
+                    
+                    # Best PAC-Bayes bound value
+                    bound_value = bounds_data.get('best_bpd_bound', np.nan)
+                    
+                    print(f"  Loaded bounds YAML: bound={bound_value:.4f}" if not np.isnan(bound_value) else "  Loaded bounds YAML")
+                except Exception as e:
+                    print(f"  Warning: Could not load bounds YAML: {e}")
+            
+            # === SECONDARY SOURCE: metrics YAML (empirical BPD) ===
+            metrics_file = find_metrics_yaml(exp_dir)
+            if metrics_file and os.path.exists(metrics_file):
+                try:
+                    with open(metrics_file, 'r') as f:
+                        metrics_data = yaml.safe_load(f)
+                    
+                    # Get empirical BPD (use best alpha)
+                    for key in ['bpd_alpha_0.01', 'bpd_alpha_0.005', 'bpd_alpha_0.05', 'bpd_alpha_0.1']:
+                        if key in metrics_data and metrics_data[key]:
+                            empirical_bpd = float(metrics_data[key])
+                            break
+                    
+                    print(f"  Loaded metrics YAML: empirical_bpd={empirical_bpd:.4f}" if not np.isnan(empirical_bpd) else "  Loaded metrics YAML")
+                except Exception as e:
+                    print(f"  Warning: Could not load metrics YAML: {e}")
+            
+            # Use val_loss as empirical_bpd proxy if not available from bounds eval
+            # (val_loss is cross-entropy in nats, BPD = loss / log(2))
+            if np.isnan(empirical_bpd) and not np.isnan(val_loss):
+                empirical_bpd = val_loss / np.log(2)
+                print(f"  Using val_loss as BPD proxy: {empirical_bpd:.4f}")
 
+            # Only add if we have at least checkpoint data
+            if best_ckpt_path or bounds_file:
                 results.append({
                     'config': name,
                     'seed': seed,
                     'budget': budget,
                     'mode': mode,
                     'ratio': ratio,
-                    'kl_divergence': metrics.get('kl_divergence', np.nan),
-                    'empirical_bpd': metrics.get('empirical_bpd', np.nan),
-                    'bound_value': metrics.get('bound_value', np.nan),
-                    'compressed_size_bits': metrics.get('compressed_size_bits', np.nan),
+                    'val_loss': float(val_loss) if not np.isnan(val_loss) else np.nan,
+                    'kl_divergence': float(kl_divergence) if not np.isnan(kl_divergence) else np.nan,
+                    'empirical_bpd': float(empirical_bpd) if not np.isnan(empirical_bpd) else np.nan,
+                    'bound_value': float(bound_value) if not np.isnan(bound_value) else np.nan,
+                    'compressed_size_bits': float(compressed_size_bits),
+                    'prefix_message_len': float(prefix_message_len),
                 })
+                print(f"  ✓ Added {name} to results")
+            else:
+                print(f"  ✗ Skipping {name}: no checkpoint or bounds data found")
+                
         except Exception as e:
             print(f"Warning: Could not parse {name}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
 
     return pd.DataFrame(results)
@@ -111,26 +335,56 @@ def extract_learned_gating(results_dir, budget, seed):
     Returns:
         np.array of shape (num_layers,) with gamma values per layer
     """
-    # Find learned gating checkpoint
-    checkpoint_path = Path(results_dir) / f'd{budget}_learned_seed{seed}' / 'best_ckpt.pt'
-
-    if not checkpoint_path.exists():
-        print(f"Warning: Checkpoint not found: {checkpoint_path}")
+    # Find learned gating checkpoint - try multiple naming conventions
+    possible_names = [
+        f'sublora-d{budget}-learned-seed{seed}',
+        f'd{budget}_learned_seed{seed}',
+        f'sublora-dim{budget}-learned-seed{seed}',
+    ]
+    
+    checkpoint_path = None
+    for name in possible_names:
+        exp_dir = Path(results_dir) / name
+        if exp_dir.exists():
+            checkpoint_path = find_best_checkpoint(exp_dir)
+            if checkpoint_path:
+                break
+    
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        print(f"Warning: Checkpoint not found for learned gating d={budget}, seed={seed}")
         return None
 
-    checkpoint = load_checkpoint(checkpoint_path)
+    try:
+        checkpoint = load_checkpoint(checkpoint_path)
+    except Exception as e:
+        print(f"Warning: Could not load checkpoint: {e}")
+        return None
 
     # Extract gating parameters from state dict
+    # Look for parameters like 'gating_params', 'allocation_logits', 'theta_split', etc.
     gating_params = {}
-    for key, value in checkpoint['raw_model'].items():
-        if 'gating_params' in key:
-            # Parse layer index from key like 'gating_params.0'
-            layer_idx = int(key.split('.')[-1])
-            # Compute gamma = sigmoid(theta_split)
-            gamma = torch.sigmoid(value).item()
-            gating_params[layer_idx] = gamma
+    state_dict = checkpoint.get('raw_model', checkpoint.get('model', {}))
+    
+    for key, value in state_dict.items():
+        if any(gating_key in key.lower() for gating_key in ['gating_param', 'allocation_logit', 'theta_split']):
+            try:
+                # Parse layer index from key
+                parts = key.split('.')
+                for p in parts:
+                    if p.isdigit():
+                        layer_idx = int(p)
+                        # Compute gamma = sigmoid(theta_split)
+                        if isinstance(value, torch.Tensor):
+                            gamma = torch.sigmoid(value).item() if value.numel() == 1 else torch.sigmoid(value).mean().item()
+                        else:
+                            gamma = 1 / (1 + np.exp(-value))  # sigmoid
+                        gating_params[layer_idx] = gamma
+                        break
+            except (ValueError, IndexError):
+                continue
 
     if not gating_params:
+        print(f"Warning: No gating parameters found in checkpoint for d={budget}, seed={seed}")
         return None
 
     # Convert to array sorted by layer index

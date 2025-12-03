@@ -2,11 +2,54 @@
 
 ## Overview
 
-This document provides a **complete end-to-end workflow** for the ICML 2025 project: "Adaptive Subspace Allocation for Compressed Neural Network Fine-Tuning." It covers implementation status, experiment commands, and visualization generation.
+This document provides a **complete end-to-end workflow** for the ICML 2025 project: "Adaptive Subspace Allocation for Compressed Neural Network Fine-Tuning."
 
 **Project Status**: 🟢 **READY FOR EXPERIMENTS**
 
-All components from the proposal are fully implemented and integrated.
+---
+
+## Documentation Index
+
+| Document | Description |
+|----------|-------------|
+| **[WORKFLOW.md](WORKFLOW.md)** (this file) | High-level workflow, implementation status, training commands |
+| **[HPC_TRAINING.md](HPC_TRAINING.md)** | NYU HPC setup, job submission, environment configuration |
+| **[HPC_EVALUATION.md](HPC_EVALUATION.md)** | PAC-Bayes bounds evaluation on HPC |
+| **[ANALYSIS.md](ANALYSIS.md)** | Results analysis, learned gating extraction, visualization |
+| **[CLAUDE.md](CLAUDE.md)** | Codebase architecture reference |
+
+---
+
+## Three-Step Process
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 1: Train 30 Models                                    │
+│  ────────────────────────────────────────────────────────── │
+│  Time: ~135 GPU-hours total (4.5 hours × 30 runs)           │
+│  Platform: NYU HPC Cloud Bursting (A100) or local           │
+│  Guide: HPC_TRAINING.md (HPC) or below (local)              │
+│  Output: best_ckpt.pt in each experiment folder             │
+└─────────────────────────────────────────────────────────────┘
+                             ↓
+┌─────────────────────────────────────────────────────────────┐
+│  Step 2: Evaluate Bounds (30 evaluations)                   │
+│  ────────────────────────────────────────────────────────── │
+│  Time: ~22.5 GPU-hours total (45 min × 30 runs)             │
+│  Platform: NYU HPC Cloud Bursting (A100)                    │
+│  Guide: HPC_EVALUATION.md                                   │
+│  Output: bounds_levels*.yml, quant_ckpt_levels*.pt          │
+└─────────────────────────────────────────────────────────────┘
+                             ↓
+┌─────────────────────────────────────────────────────────────┐
+│  Step 3: Analyze Results & Generate Visualizations          │
+│  ────────────────────────────────────────────────────────── │
+│  Time: ~5 minutes (CPU)                                     │
+│  Platform: Local machine                                    │
+│  Guide: ANALYSIS.md                                         │
+│  Output: 10 plots/tables in analysis_outputs/               │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -808,20 +851,17 @@ python experiments/eval_bounds.py \
     --bounds.bound_type=sequence_level
 ```
 
-### Important Note
+### Bounds Output Files
 
-The bounds evaluation script needs to save metrics to `bounds_metrics.pt`. Ensure `experiments/eval_bounds.py` includes:
+The bounds evaluation creates these files in each experiment's output folder:
 
-```python
-# Add at the end of eval_bounds.py
-metrics = {
-    'kl_divergence': kl_value,
-    'empirical_bpd': empirical_risk,
-    'bound_value': bound_value,
-    'compressed_size_bits': compressed_bits
-}
-torch.save(metrics, os.path.join(checkpoint_path, 'bounds_metrics.pt'))
-```
+| File | Contents |
+|------|----------|
+| `quant_ckpt_levels{X}_iters{Y}.pt` | Quantized checkpoint with `prefix_message_len` |
+| `bounds_levels{X}_iters{Y}.yml` | PAC-Bayes bounds (`best_bpd_bound`, `bpd_divergence`) |
+| `metrics_levels{X}_iters{Y}.yml` | Empirical metrics (`bpd_alpha_*`, `top_k_acc`) |
+
+**📖 For HPC bounds evaluation, see [HPC_EVALUATION.md](HPC_EVALUATION.md)**
 
 ---
 
@@ -854,6 +894,16 @@ analysis_outputs/
 ├── summary_table.csv                      # All numerical results
 └── summary_table.tex                      # LaTeX format for paper
 ```
+
+### Learned Gating Analysis
+
+The analysis script extracts per-layer gating parameters (γ_ℓ) from checkpoints trained with `allocation_mode=learned`:
+
+- **Heatmaps**: Visualize γ values across layers and seeds
+- **Trend plots**: Show how γ evolves with layer depth
+- **Interpretation**: γ close to 0 → A-heavy, γ close to 1 → B-heavy
+
+**📖 For detailed analysis documentation, see [ANALYSIS.md](ANALYSIS.md)**
 
 ### Visual Outputs Explained
 
