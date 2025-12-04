@@ -2,9 +2,9 @@ out
 out/
 out/*
 
-sublora-experiments/hpc_out
-sublora-experiments/hpc_out/
-sublora-experiments/hpc_out/*
+sublora-experiments
+sublora-experiments/
+sublora-experiments/*
 
 experiments/out
 experiments/out/
