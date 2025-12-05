@@ -2,9 +2,9 @@ out
 out/
 out/*
 
-sublora-experiments
-sublora-experiments/
-sublora-experiments/*
+results
+results/
+results/*
 
 experiments/out
 experiments/out/

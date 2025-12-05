@@ -17,8 +17,8 @@ def get_doc_indices(train_data, eot_token, openwebtext_train_eot_indices_file='/
     """
 
     if os.path.exists(openwebtext_train_eot_indices_file):
-        openwebtext_train_eot_indices = np.load(openwebtext_train_eot_indices_file)
-        empirical_document_length_distribution = np.load(empirical_document_length_distribution_file)
+        openwebtext_train_eot_indices = np.load(openwebtext_train_eot_indices_file, allow_pickle=True)
+        empirical_document_length_distribution = np.load(empirical_document_length_distribution_file, allow_pickle=True)
     else:
         # openwebtext_train_eot_indices
         openwebtext_train_eot_indices =  np.where(train_data==eot_token)

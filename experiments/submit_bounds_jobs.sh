@@ -31,7 +31,7 @@ HIGH_DIM=${DIMS_ARR[1]}
 
 ACCOUNT="ds_ga_1006-2025fa"
 PARTITION="c12m85-a100-1"
-TIME="01:00:00"
+TIME=${TIME:-"02:00:00"}
 
 # Paths - uses HPC_USER's scratch space
 REPO_DIR="/scratch/${HPC_USER}/sublora-repo"
@@ -71,7 +71,11 @@ for exp_dir in ${EXPERIMENTS_DIR}/sublora-d*; do
         # Extract the number after -d
         d_num=$(echo "${exp_name}" | grep -oP '(?<=-d)\d+')
         # Build the path to the date directories
-        base_path="${exp_dir}/out/SubLoRA_Pretrain/id${d_num}_lr0.005_r4"
+        # Try both lr0.0005 (current) and lr0.005 (paper default) patterns
+        base_path="${exp_dir}/out/SubLoRA_Pretrain/id${d_num}_lr0.0005_r4"
+        if [ ! -d "${base_path}" ]; then
+            base_path="${exp_dir}/out/SubLoRA_Pretrain/id${d_num}_lr0.005_r4"
+        fi
         # Get most recent date folder
         exp_ckpt_date_dir=$(ls -d "${base_path}"/*/ 2>/dev/null | sort -r | head -1)
         # Get most recent time folder within that date

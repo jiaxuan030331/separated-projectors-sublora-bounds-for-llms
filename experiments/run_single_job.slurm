@@ -3,7 +3,7 @@
 #SBATCH --account=ds_ga_1006-2025fa
 #SBATCH --partition=c12m85-a100-1
 #SBATCH --gres=gpu:1
-#SBATCH --time=5:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --open-mode=append
@@ -39,7 +39,7 @@
 HPC_USER=${HPC_USER:-${USER:-$(whoami)}}
 
 # Default values (override via --export)
-DIM=${DIM:-1000}
+DIM=${DIM:-10000}
 MODE=${MODE:-uniform}
 RATIO=${RATIO:-0.5}
 SEED=${SEED:-42}

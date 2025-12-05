@@ -67,10 +67,45 @@ if [ ! -f "${CHECKPOINT_DIR}/best_ckpt.pt" ]; then
     exit 1
 fi
 
-# Set wandb API key if available (from HPC_USER's scratch)
-if [ -f /scratch/${HPC_USER}/.wandb_api_key ]; then
-    export WANDB_API_KEY=$(cat /scratch/${HPC_USER}/.wandb_api_key)
+# Extract experiment configuration from directory path
+# Path format: /scratch/user/sublora-experiments/sublora-d{dim}-{mode}-seed{seed}/out/...
+EXP_DIR=$(echo "${CHECKPOINT_DIR}" | grep -oP '/scratch/.+?/sublora-experiments/[^/]+' | tail -1)
+EXP_NAME=$(basename "${EXP_DIR}")
+
+# Parse experiment name: sublora-d{dim}-{mode}-seed{seed}
+# Extract intrinsic dimension
+INTRINSIC_DIM=$(echo "${EXP_NAME}" | grep -oP '(?<=-d)\d+')
+
+# Extract allocation mode and ratio
+if echo "${EXP_NAME}" | grep -q "uniform"; then
+    ALLOCATION_MODE="uniform"
+    ALLOCATION_RATIO="0.5"
+elif echo "${EXP_NAME}" | grep -q "learned"; then
+    ALLOCATION_MODE="learned"
+    ALLOCATION_RATIO="0.5"
+elif echo "${EXP_NAME}" | grep -q "fixed-aheavy"; then
+    ALLOCATION_MODE="fixed"
+    ALLOCATION_RATIO="0.2"
+elif echo "${EXP_NAME}" | grep -q "fixed-equal"; then
+    ALLOCATION_MODE="fixed"
+    ALLOCATION_RATIO="0.5"
+elif echo "${EXP_NAME}" | grep -q "fixed-bheavy"; then
+    ALLOCATION_MODE="fixed"
+    ALLOCATION_RATIO="0.8"
+else
+    echo "WARNING: Could not parse allocation mode from ${EXP_NAME}, using defaults"
+    ALLOCATION_MODE="uniform"
+    ALLOCATION_RATIO="0.5"
 fi
+
+echo "Parsed configuration:"
+echo "  Intrinsic Dim: ${INTRINSIC_DIM}"
+echo "  Allocation Mode: ${ALLOCATION_MODE}"
+echo "  Allocation Ratio: ${ALLOCATION_RATIO}"
+echo "=========================================="
+
+# Disable wandb for bounds evaluation (avoid permission issues)
+export WANDB_MODE=disabled
 
 # Run bounds evaluation
 # Note: --model.best_checkpoint_path should point to the directory containing best_ckpt.pt
@@ -84,10 +119,16 @@ singularity exec --nv \
         conda activate sublora
         cd ${REPO_DIR}
         
+        export WANDB_MODE=disabled
+        
         python experiments/eval_bounds.py \
             --config-file=config/sublora_bounds.yaml \
+            --login.wandb_log=False \
             --data.dataset_dir=${DATA_DIR} \
             --model.best_checkpoint_path=${CHECKPOINT_DIR} \
+            --sublora.intrinsic_dim=${INTRINSIC_DIM} \
+            --sublora.allocation_mode=${ALLOCATION_MODE} \
+            --sublora.allocation_ratio=${ALLOCATION_RATIO} \
             --bounds.bound_type=document_level \
             --bounds.levels=11 \
             --bounds.bound_samples=10000 \

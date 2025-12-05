@@ -26,14 +26,14 @@ read -ra SEEDS <<< "$SEEDS_STR"
 
 ACCOUNT="ds_ga_1006-2025fa"
 PARTITION="c12m85-a100-1"  # A100 GPU partition
-TIME="08:00:00"            # 8 hours per job (adjust as needed)
+TIME="12:00:00"            # 12 hours per job (adjust as needed)
 
 # Base directories - uses HPC_USER's scratch space
 REPO_DIR="/scratch/${HPC_USER}/sublora-repo"
 SLURM_SCRIPT="$REPO_DIR/experiments/run_single_job.slurm"
 
 
-DIMS=${DIMS:-"10000 20000"}
+DIMS=${DIMS:-"20000 50000"}
 read -ra DIMS_ARR <<< "$DIMS"
 
 LOW_DIM=${DIMS_ARR[0]}
