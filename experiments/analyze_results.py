@@ -169,24 +169,29 @@ def extract_bounds_metrics(results_dir):
             # Example: sublora-d1000-uniform-seed42, sublora-d1000-fixed-bheavy-seed42
             
             # Extract budget (intrinsic dimension)
-            if 'd1000' in name or 'dim1000' in name:
-                budget = 1000
-            elif 'd2000' in name or 'dim2000' in name:
-                budget = 2000
-            elif name.startswith('d1000'):
-                budget = 1000
-            elif name.startswith('d2000'):
-                budget = 2000
+            # Use regex to extract the full number after 'd' or 'dim'
+            import re
+            budget = None
+            
+            # Try to match '-d' followed by digits and then '-' (e.g., sublora-d10000-uniform)
+            match = re.search(r'-d(\d+)-', name)
+            if match:
+                budget = int(match.group(1))
             else:
-                # Try to extract from parts
-                parts = name.replace('-', '_').split('_')
-                budget = None
-                for p in parts:
-                    if p.startswith('d') and p[1:].isdigit():
-                        budget = int(p[1:])
-                        break
-                if budget is None:
-                    continue
+                # Try 'dim' followed by digits
+                match = re.search(r'dim(\d+)', name)
+                if match:
+                    budget = int(match.group(1))
+                else:
+                    # Fallback: try extracting from parts
+                    parts = name.replace('-', '_').split('_')
+                    for p in parts:
+                        if p.startswith('d') and p[1:].isdigit():
+                            budget = int(p[1:])
+                            break
+            
+            if budget is None:
+                continue
 
             # Extract seed
             seed = None
@@ -569,7 +574,10 @@ def plot_learned_gating_trend(results_dir, budgets, seeds, output_dir):
     # Create line plot
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    colors = {1000: 'blue', 2000: 'red'}
+    # Dynamic color mapping based on available budgets
+    color_cycle = ['blue', 'red', 'green', 'orange', 'purple', 'brown']
+    budget_list = sorted(gamma_data.keys())
+    colors = {b: color_cycle[i % len(color_cycle)] for i, b in enumerate(budget_list)}
 
     for budget, gamma_list in gamma_data.items():
         if not gamma_list:
@@ -735,6 +743,9 @@ def plot_allocation_comparison_grid(df, output_dir):
                       'bpd_mean', 'bpd_std', 'size_mean', 'size_std',
                       'bound_mean', 'bound_std']
 
+    # Get unique budgets from data (dynamically)
+    budgets = sorted(df_avg['budget'].unique())
+    
     # Mode styles
     mode_colors = {
         'uniform': '#888888',
@@ -757,10 +768,10 @@ def plot_allocation_comparison_grid(df, output_dir):
 
     # Plot 1: BPD comparison (bar chart)
     ax1 = axes[0, 0]
-    for budget in [1000, 2000]:
+    for i, budget in enumerate(budgets):
         df_budget = df_avg[df_avg['budget'] == budget]
         x_pos = np.arange(len(df_budget))
-        offset = 0.2 if budget == 1000 else -0.2
+        offset = 0.2 if i == 0 else -0.2
 
         colors = [mode_colors.get(mode, '#888888') for mode in df_budget['mode']]
         bars = ax1.bar(x_pos + offset, df_budget['bpd_mean'], 0.35,
@@ -777,10 +788,10 @@ def plot_allocation_comparison_grid(df, output_dir):
 
     # Plot 2: Bound comparison (bar chart)
     ax2 = axes[0, 1]
-    for budget in [1000, 2000]:
+    for i, budget in enumerate(budgets):
         df_budget = df_avg[df_avg['budget'] == budget]
         x_pos = np.arange(len(df_budget))
-        offset = 0.2 if budget == 1000 else -0.2
+        offset = 0.2 if i == 0 else -0.2
 
         colors = [mode_colors.get(mode, '#888888') for mode in df_budget['mode']]
         bars = ax2.bar(x_pos + offset, df_budget['bound_mean'], 0.35,
@@ -797,10 +808,10 @@ def plot_allocation_comparison_grid(df, output_dir):
 
     # Plot 3: Compression size (bar chart)
     ax3 = axes[1, 0]
-    for budget in [1000, 2000]:
+    for i, budget in enumerate(budgets):
         df_budget = df_avg[df_avg['budget'] == budget]
         x_pos = np.arange(len(df_budget))
-        offset = 0.2 if budget == 1000 else -0.2
+        offset = 0.2 if i == 0 else -0.2
 
         colors = [mode_colors.get(mode, '#888888') for mode in df_budget['mode']]
         bars = ax3.bar(x_pos + offset, df_budget['size_mean']/8000, 0.35,
@@ -817,15 +828,18 @@ def plot_allocation_comparison_grid(df, output_dir):
 
     # Plot 4: Relative improvement over baseline
     ax4 = axes[1, 1]
-    for budget in [1000, 2000]:
+    for i, budget in enumerate(budgets):
         df_budget = df_avg[df_avg['budget'] == budget].copy()
-        baseline_bpd = df_budget[df_budget['mode'] == 'uniform']['bpd_mean'].values[0]
+        baseline_rows = df_budget[df_budget['mode'] == 'uniform']
+        if len(baseline_rows) == 0:
+            continue
+        baseline_bpd = baseline_rows['bpd_mean'].values[0]
 
         df_budget['improvement'] = (baseline_bpd - df_budget['bpd_mean']) / baseline_bpd * 100
 
         colors = [mode_colors.get(mode, '#888888') for mode in df_budget['mode']]
         x_pos = np.arange(len(df_budget))
-        offset = 0.2 if budget == 1000 else -0.2
+        offset = 0.2 if i == 0 else -0.2
 
         bars = ax4.bar(x_pos + offset, df_budget['improvement'], 0.35,
                       label=f'd={budget}', alpha=0.8, color=colors,
