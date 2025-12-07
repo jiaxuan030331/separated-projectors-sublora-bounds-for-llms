@@ -1030,7 +1030,27 @@ class StructuredIDModule(nn.Module):
                 alpha_A = alpha * (1 - mask)
 
                 if f'{layer_key}_A' in self.projectors:
-                    flat_A = self.projectors[f'{layer_key}_A'] @ alpha_A
+                    proj = self.projectors[f'{layer_key}_A']
+                    # Defensive check: ensure projector expects the same input dim as alpha
+                    expected_d = None
+                    try:
+                        expected_d = proj.shape[-1]
+                    except Exception:
+                        pass
+                    if expected_d is None:
+                        P_attr = getattr(proj, 'P', None)
+                        if P_attr is not None and hasattr(P_attr, 'shape'):
+                            expected_d = P_attr.shape[1]
+
+                    if expected_d is not None and alpha_A.numel() != int(expected_d):
+                        raise RuntimeError(
+                            f"Projector input dim mismatch for {layer_key}_A: "
+                            f"projector expects d={expected_d}, alpha length={alpha_A.numel()}, "
+                            f"d_alloc={d_alloc}, d_alloc_order={self.d_alloc_order}, "
+                            f"projectors={list(self.projectors.keys())}"
+                        )
+
+                    flat_A = proj @ alpha_A
                     if layer_key == 'misc':
                         layer_params_A = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                         layer_names_A = [n for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
@@ -1040,7 +1060,27 @@ class StructuredIDModule(nn.Module):
                     self._set_params(flat_A, layer_names_A, layer_params_A)
 
                 if f'{layer_key}_B' in self.projectors:
-                    flat_B = self.projectors[f'{layer_key}_B'] @ alpha_B
+                    proj = self.projectors[f'{layer_key}_B']
+                    # Defensive check: ensure projector expects the same input dim as alpha
+                    expected_d = None
+                    try:
+                        expected_d = proj.shape[-1]
+                    except Exception:
+                        pass
+                    if expected_d is None:
+                        P_attr = getattr(proj, 'P', None)
+                        if P_attr is not None and hasattr(P_attr, 'shape'):
+                            expected_d = P_attr.shape[1]
+
+                    if expected_d is not None and alpha_B.numel() != int(expected_d):
+                        raise RuntimeError(
+                            f"Projector input dim mismatch for {layer_key}_B: "
+                            f"projector expects d={expected_d}, alpha length={alpha_B.numel()}, "
+                            f"d_alloc={d_alloc}, d_alloc_order={self.d_alloc_order}, "
+                            f"projectors={list(self.projectors.keys())}"
+                        )
+
+                    flat_B = proj @ alpha_B
                     if layer_key == 'misc':
                         layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                         layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
