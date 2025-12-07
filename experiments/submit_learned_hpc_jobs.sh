@@ -13,7 +13,8 @@ PARTITION="c12m85-a100-1"
 TIME="12:00:00"
 
 REPO_DIR="/scratch/${HPC_USER}/sublora-repo"
-SLURM_SCRIPT="$REPO_DIR/experiments/run_single_learned_job.slurm"
+# Use the standard training job template for learned experiments
+SLURM_SCRIPT="$REPO_DIR/experiments/run_single_job.slurm"
 
 DIMS=${DIMS:-"10000 20000"}
 read -ra DIMS_ARR <<< "$DIMS"
