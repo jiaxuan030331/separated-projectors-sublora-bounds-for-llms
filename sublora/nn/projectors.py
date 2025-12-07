@@ -952,24 +952,9 @@ class StructuredIDModule(nn.Module):
                 D_B = sum(p.numel() for p in layer_params_B)
 
                 if D_A > 0:
-                    projA = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
-                    # runtime sanity check: projector should map R^{d_alloc} -> R^{D_A}
-                    try:
-                        proj_shape = tuple(projA.shape)
-                    except Exception:
-                        proj_shape = None
-                    if proj_shape is not None and proj_shape != (int(D_A), int(d_alloc)):
-                        raise RuntimeError(f"Projector shape mismatch for layer {layer_key}_A: expected ({D_A},{d_alloc}), got {proj_shape}")
-                    self.projectors[f'{layer_key}_A'] = projA
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
                 if D_B > 0:
-                    projB = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
-                    try:
-                        proj_shape = tuple(projB.shape)
-                    except Exception:
-                        proj_shape = None
-                    if proj_shape is not None and proj_shape != (int(D_B), int(d_alloc)):
-                        raise RuntimeError(f"Projector shape mismatch for layer {layer_key}_B: expected ({D_B},{d_alloc}), got {proj_shape}")
-                    self.projectors[f'{layer_key}_B'] = projB
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
 
             # Create params for misc group (if present). The misc allocation is last in d_alloc_order
             if self.has_misc:
@@ -988,72 +973,9 @@ class StructuredIDModule(nn.Module):
                 D_B = sum(p.numel() for p in layer_params_B)
 
                 if D_A > 0:
-                    projA = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
-                    try:
-                        proj_shape = tuple(projA.shape)
-                    except Exception:
-                        proj_shape = None
-                    if proj_shape is not None and proj_shape != (int(D_A), int(d_alloc)):
-                        raise RuntimeError(f"Projector shape mismatch for misc_A: expected ({D_A},{d_alloc}), got {proj_shape}")
-                    self.projectors[f'{layer_key}_A'] = projA
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
                 if D_B > 0:
-                    projB = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
-                    try:
-                        proj_shape = tuple(projB.shape)
-                    except Exception:
-                        proj_shape = None
-                    if proj_shape is not None and proj_shape != (int(D_B), int(d_alloc)):
-                        raise RuntimeError(f"Projector shape mismatch for misc_B: expected ({D_B},{d_alloc}), got {proj_shape}")
-                    self.projectors[f'{layer_key}_B'] = projB
-            # --- Ensure actual projector input dims match allocations ---
-            # Some projector factories may internally round or change the requested
-            # input dimension; detect the actual input dim per group and resize
-            # `self.subspace_params` and allocation trackers accordingly.
-            group_keys_actual = [str(l) for l in self.layers] + (['misc'] if self.has_misc else [])
-            actual_ds = []
-            for i, key in enumerate(group_keys_actual):
-                # Prefer A projector shape if present, else B
-                pa = self.projectors.get(f'{key}_A', None)
-                pb = self.projectors.get(f'{key}_B', None)
-                proj = pa if pa is not None else pb
-                if proj is None:
-                    # No projector for this group (empty); fall back to requested allocation
-                    actual_ds.append(int(self.d_alloc_order[i]))
-                    continue
-                try:
-                    actual_in = int(getattr(proj, 'shape')[1])
-                except Exception:
-                    # projector may not expose .shape; try to infer via projection of zeros
-                    try:
-                        with torch.no_grad():
-                            test = torch.zeros(int(self.d_alloc_order[i]))
-                            out = proj @ test
-                            actual_in = int(test.numel())
-                    except Exception:
-                        actual_in = int(self.d_alloc_order[i])
-                actual_ds.append(actual_in)
-
-            total_actual = sum(actual_ds)
-            if total_actual != int(self.d):
-                old_d = int(self.d)
-                # resize subspace_params to match total_actual
-                new_sub = nn.Parameter(torch.empty(total_actual))
-                # compute kaiming-style bound consistent with earlier init
-                fan_in = max(1, int(total_actual))
-                gain = nn.init.calculate_gain('linear')
-                bound = math.sqrt(3.0) * gain / math.sqrt(fan_in)
-                nn.init.uniform_(new_sub, a=-bound, b=bound)
-                # copy old values into front of new vector (or truncate if smaller)
-                with torch.no_grad():
-                    copy_len = min(old_d, total_actual)
-                    new_sub.data[:copy_len] = self.subspace_params.data[:copy_len]
-                self.subspace_params = new_sub
-                # update allocation trackers
-                self.d_alloc_order = [int(x) for x in actual_ds]
-                self.d_alloc_map = {k: int(v) for k, v in zip(group_keys_actual, self.d_alloc_order)}
-                # update nominal per-layer for compatibility
-                self.d_per_layer = int(sum(self.d_alloc_order) // max(1, len(self.d_alloc_order)))
-                print(f"Adjusted subspace_params size from {old_d} to {total_actual} to match projector input dims")
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
 
         else:
             # Fixed Global Split
@@ -1108,15 +1030,7 @@ class StructuredIDModule(nn.Module):
                 alpha_A = alpha * (1 - mask)
 
                 if f'{layer_key}_A' in self.projectors:
-                    # sanity check: alpha_A length must match projector input dim
-                    projA = self.projectors[f'{layer_key}_A']
-                    try:
-                        proj_in = int(projA.shape[1])
-                    except Exception:
-                        proj_in = None
-                    if proj_in is not None and alpha_A.numel() != proj_in:
-                        raise RuntimeError(f"Alpha length mismatch for {layer_key}_A: alpha length={alpha_A.numel()}, projector expects {proj_in}")
-                    flat_A = projA @ alpha_A
+                    flat_A = self.projectors[f'{layer_key}_A'] @ alpha_A
                     if layer_key == 'misc':
                         layer_params_A = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                         layer_names_A = [n for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
@@ -1126,14 +1040,7 @@ class StructuredIDModule(nn.Module):
                     self._set_params(flat_A, layer_names_A, layer_params_A)
 
                 if f'{layer_key}_B' in self.projectors:
-                    projB = self.projectors[f'{layer_key}_B']
-                    try:
-                        proj_in = int(projB.shape[1])
-                    except Exception:
-                        proj_in = None
-                    if proj_in is not None and alpha_B.numel() != proj_in:
-                        raise RuntimeError(f"Alpha length mismatch for {layer_key}_B: alpha length={alpha_B.numel()}, projector expects {proj_in}")
-                    flat_B = projB @ alpha_B
+                    flat_B = self.projectors[f'{layer_key}_B'] @ alpha_B
                     if layer_key == 'misc':
                         layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                         layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
