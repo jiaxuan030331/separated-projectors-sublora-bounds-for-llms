@@ -824,7 +824,13 @@ class StructuredIDModule(nn.Module):
         
         # Initialize subspace parameters as a SINGLE tensor for compatibility with quantize_model
         self.subspace_params = nn.Parameter(torch.empty(self.d))
-        nn.init.kaiming_uniform_(self.subspace_params)
+        # Kaiming-style initialization for a 1-D subspace vector: approximate
+        # kaiming_uniform by treating the vector as a (1, d) weight with fan_in=d.
+        # bound = sqrt(3) * gain / sqrt(fan_in), with gain=1.0 for linear.
+        fan_in = max(1, int(self.d))
+        gain = nn.init.calculate_gain('linear')
+        bound = math.sqrt(3.0) * gain / math.sqrt(fan_in)
+        nn.init.uniform_(self.subspace_params, a=-bound, b=bound)
 
         self.projectors = {} # Not nn.ModuleDict because projectors are not Modules
         self.gating_params = nn.ParameterDict() # For learned gating
