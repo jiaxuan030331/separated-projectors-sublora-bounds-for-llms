@@ -95,9 +95,22 @@ def extract_config_from_checkpoint(checkpoint_path):
                 if match:
                     intrinsic_dim = int(match.group(1))
         
+        # Also try to extract any allocation metadata saved in the checkpoint
+        allocation_config = ckpt.get('allocation_config', None)
+        # Some checkpoints may embed training config under 'config'
+        if allocation_config is None:
+            allocation_config = config.get('sublora', {}).get('allocation_config', None)
+
+        d_alloc_map = ckpt.get('d_alloc_map', None)
+        d_alloc_order = ckpt.get('d_alloc_order', None)
+
         return {
             'intrinsic_dim': intrinsic_dim,
-            'config': config
+            'config': config,
+            'allocation_config': allocation_config,
+            'd_alloc_map': d_alloc_map,
+            'd_alloc_order': d_alloc_order,
+            'raw_checkpoint': ckpt,
         }
     except Exception as e:
         print(f"    Warning: Could not load checkpoint config: {e}")
@@ -105,7 +118,8 @@ def extract_config_from_checkpoint(checkpoint_path):
 
 
 def run_bounds_evaluation(checkpoint_dir, config_file, dataset_dir, 
-                          eot_indices_file, doc_lengths_file, intrinsic_dim=None):
+                          eot_indices_file, doc_lengths_file, intrinsic_dim=None,
+                          ckpt_config=None):
     """Run bounds evaluation for a single checkpoint."""
     from fastargs import get_current_config, Param, Section
     from fastargs.decorators import param
@@ -130,6 +144,23 @@ def run_bounds_evaluation(checkpoint_dir, config_file, dataset_dir,
     
     if intrinsic_dim is not None:
         args.append(f'--sublora.intrinsic_dim={intrinsic_dim}')
+
+    # If the checkpoint contained allocation metadata, pass it through as
+    # CLI overrides so the evaluation model is constructed identically to
+    # the training run (prevents default-cap heuristics from changing behavior).
+    try:
+        alloc = None
+        if ckpt_config is not None:
+            alloc = ckpt_config.get('allocation_config', None)
+        if alloc is not None:
+            # Expect alloc to be a dict of simple values (ints/floats/bools/strs)
+            for k, v in alloc.items():
+                # Flatten single-level keys into fastargs dot notation
+                arg_name = f'--sublora.allocation_config.{k}={v}'
+                args.append(arg_name)
+            print(f'    Using allocation_config from checkpoint: {alloc}')
+    except Exception:
+        pass
     
     # Override sys.argv for fastargs
     old_argv = sys.argv
@@ -270,10 +301,14 @@ def main():
         print(f"\n[{i}/{len(checkpoints)}] Evaluating: {exp_name}")
         print(f"    Checkpoint: {ckpt_dir}")
         
-        # Extract config from checkpoint
+        # Extract config and allocation metadata from checkpoint
         ckpt_config = extract_config_from_checkpoint(ckpt_path)
         intrinsic_dim = ckpt_config.get('intrinsic_dim')
         print(f"    Intrinsic dim: {intrinsic_dim}")
+        if ckpt_config.get('allocation_config') is not None:
+            print(f"    checkpoint allocation_config: {ckpt_config.get('allocation_config')}")
+        if ckpt_config.get('d_alloc_map') is not None:
+            print(f"    checkpoint d_alloc_map: {ckpt_config.get('d_alloc_map')}")
         
         start_time = datetime.now()
         success = run_bounds_evaluation(
@@ -282,7 +317,8 @@ def main():
             dataset_dir=args.dataset_dir,
             eot_indices_file=args.eot_indices_file,
             doc_lengths_file=args.doc_lengths_file,
-            intrinsic_dim=intrinsic_dim
+            intrinsic_dim=intrinsic_dim,
+            ckpt_config=ckpt_config
         )
         elapsed = datetime.now() - start_time
         
