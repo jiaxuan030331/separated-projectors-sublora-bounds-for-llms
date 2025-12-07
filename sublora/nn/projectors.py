@@ -1,9 +1,14 @@
 import torch
 import numpy as np
 import torch.nn as nn
+from torch.nn import functional as F
 from copy import deepcopy
 import random
 from functools import partial
+import inspect
+import re
+import math
+
 from sublora.nn.linear_operator_base import (
     Lazy,
     LazyKron,
@@ -12,14 +17,6 @@ from sublora.nn.linear_operator_base import (
     LinearOperator,
     LazyDirectSum,
 )
-
-import inspect
-import re
-import math
-
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
 
 
 _DEFAULT_SEED = 137
@@ -163,33 +160,54 @@ class IDModule(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+
+        # Separate gating params (will get a special LR multiplier)
+        gating_param_names = [pn for pn in param_dict.keys() if pn.startswith('gating_params')]
+        gating_params = [param_dict[pn] for pn in gating_param_names]
+
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        optim_groups = []
         if not no_decay_bias:
-            optim_groups = [
-                {'params': [p for n, p in param_dict.items()], 'weight_decay': weight_decay},
-            ]
-            print("using all params")
+            # all params decayed except gating handled separately
+            normal_params = [p for pn, p in param_dict.items() if not pn.startswith('gating_params')]
+            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay})
+            if gating_params:
+                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+            print("using all params (with gating params grouped if present)")
         else:
-            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-            optim_groups = [
-                {'params': decay_params, 'weight_decay': weight_decay},
-                {'params': nodecay_params, 'weight_decay': 0.0}
-            ]
+            # split into decayed and non-decayed, then move gating params into dedicated groups
+            decay_params = [p for pn, p in param_dict.items() if (p.dim() >= 2 and not pn.startswith('gating_params'))]
+            nodecay_params = [p for pn, p in param_dict.items() if (p.dim() < 2 and not pn.startswith('gating_params'))]
+
+            if decay_params:
+                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay})
+            if nodecay_params:
+                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0})
+
+            # gating params: separate into decay vs nodecay depending on dim
+            if gating_params:
+                gating_decay = [p for p in gating_params if p.dim() >= 2]
+                gating_nodecay = [p for p in gating_params if p.dim() < 2]
+                if gating_decay:
+                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                if gating_nodecay:
+                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': learning_rate * self.gating_lr_mult})
+
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
             print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
             print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        
+
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
-        # optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, correct_bias=correct_bias, eps=adam_epislon, **extra_args)
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, eps=adam_epislon, **extra_args)
 
         print(f"using fused AdamW: {use_fused}")
+        if gating_param_names:
+            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr_mult={self.gating_lr_mult}")
 
         return optimizer
 
@@ -278,15 +296,14 @@ class LazyRandom(LinearOperator):
         self.info = (D, d, seed)
 
     def _matvec(self, v):
-        D, d, seed = self.info
         return RandomMultiply.apply(v, *self.info)
 
     def _matmat(self, v):
-        D, d, seed = self.info
         return RandomMultiply.apply(v, *self.info)
 
     def __repr__(self):
-        return f"LazyRandom({self.D}, {self.d}, seed={self.seed})"
+        D, d, seed = self.info
+        return f"LazyRandom({D}, {d}, seed={seed})"
 
 
 class LazyRandomQR(LinearOperator):
@@ -301,11 +318,11 @@ class LazyRandomQR(LinearOperator):
         """Get P matrix on the same device and dtype as v, with caching."""
         target_device = v.device
         target_dtype = v.dtype
-        
+
         if self._cached_P is not None:
             if self._cached_P.device == target_device and self._cached_P.dtype == target_dtype:
                 return self._cached_P
-        
+
         # Convert and cache
         self._cached_P = self.P.to(device=target_device, dtype=target_dtype)
         return self._cached_P
@@ -317,7 +334,8 @@ class LazyRandomQR(LinearOperator):
         return self._get_P(v) @ v
 
     def __repr__(self):
-        return f"LazyRandomQR({self.D}, {self.d}, seed={self.seed})"
+        D, d, seed = self.info
+        return f"LazyRandomQR({D}, {d}, seed={seed})"
 
 
 class LazyOneSidedKron(LinearOperator):
@@ -762,6 +780,27 @@ class StructuredIDModule(nn.Module):
         self.allocation_config = allocation_config or {}
         self.mode = self.allocation_config.get('mode', 'uniform') # uniform, fixed, learned
         self.ratio = self.allocation_config.get('ratio', 0.5) # for fixed, d_B / (d_A + d_B)
+        # gating_scale controls the steepness of the sigmoid used for soft masking.
+        # You can provide either:
+        #  - 'gating_scale' in `allocation_config` to set an explicit scale, or
+        #  - 'gating_fraction' in `allocation_config` to request that the sigmoid
+        #    transition span a fraction of the per-layer block size `d_per_layer`.
+        # If neither is provided, we fall back to a reasonable default of 5.
+        self.gating_scale = self.allocation_config.get('gating_scale', None)
+        self.gating_fraction = self.allocation_config.get('gating_fraction', None)
+        # initialization std for gating params (small noise to break symmetry)
+        self.gating_init_std = float(self.allocation_config.get('gating_init_std', 0.01))
+        # multiplier for gating learning rate (creates a separate optimizer group)
+        self.gating_lr_mult = float(self.allocation_config.get('gating_lr_mult', 5.0))
+        # Optional gating annealing configuration. If provided, should be a dict with keys:
+        #   'start': initial scale (float) or None to use current computed scale
+        #   'end': final scale (float)
+        #   'total_steps': number of steps over which to anneal (int)
+        #   'mode': 'linear' or 'cosine' (default 'linear')
+        #   'auto_step': if True, automatically step the annealer on each forward() call (default True)
+        self.gating_anneal = self.allocation_config.get('gating_anneal', None)
+        # Internal anneal step counter
+        self._anneal_step = 0
         
         self._forward_net = [net]
         
@@ -784,8 +823,9 @@ class StructuredIDModule(nn.Module):
         self.param_groups['A']['items'].extend(self.param_groups['other']['items'])
         
         # Initialize subspace parameters as a SINGLE tensor for compatibility with quantize_model
-        self.subspace_params = nn.Parameter(torch.zeros(self.d))
-        
+        self.subspace_params = nn.Parameter(torch.empty(self.d))
+        nn.init.kaiming_uniform_(self.subspace_params)
+
         self.projectors = {} # Not nn.ModuleDict because projectors are not Modules
         self.gating_params = nn.ParameterDict() # For learned gating
         
@@ -814,52 +854,122 @@ class StructuredIDModule(nn.Module):
             self.has_misc = misc_params_exist
             
             num_groups = len(self.layers) + (1 if self.has_misc else 0)
-            self.d_per_layer = self.d // num_groups if num_groups > 0 else self.d
-            
-            # Create params for each layer
+
+            # Compute per-group (per-layer + misc) parameter counts so we can
+            # allocate intrinsic dimensions proportionally rather than equally.
+            group_D = []
+            group_keys = []
+
             for layer_idx in self.layers:
                 layer_key = str(layer_idx)
-                
+                layer_params = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n] + [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
+                D_layer = sum(p.numel() for p in layer_params)
+                group_keys.append(layer_key)
+                group_D.append(max(0, D_layer))
+
+            if self.has_misc:
+                misc_params = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)] + [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
+                D_misc = sum(p.numel() for p in misc_params)
+                group_keys.append('misc')
+                group_D.append(max(0, D_misc))
+
+            total_group_D = sum(group_D) if sum(group_D) > 0 else num_groups
+
+            # Allocate integer intrinsic dims per group proportional to parameter counts.
+            # Ensure at least 1 per group, then distribute remainder.
+            raw_alloc = [max(1, int(round(self.d * (d_i / total_group_D)))) for d_i in group_D]
+            alloc_sum = sum(raw_alloc)
+            # fix rounding errors: adjust by distributing difference
+            diff = self.d - alloc_sum
+            i = 0
+            while diff != 0:
+                idx = i % len(raw_alloc)
+                if diff > 0:
+                    raw_alloc[idx] += 1
+                    diff -= 1
+                else:
+                    if raw_alloc[idx] > 1:
+                        raw_alloc[idx] -= 1
+                        diff += 1
+                i += 1
+
+            # Map allocations to layer keys for later use
+            self.d_alloc_map = {k: int(v) for k, v in zip(group_keys, raw_alloc)}
+            # Keep a list in the same order as self.layers followed by misc (if present)
+            self.d_alloc_order = [self.d_alloc_map[k] for k in group_keys]
+
+            # For backward compatibility, set a nominal d_per_layer as the integer mean
+            self.d_per_layer = int(sum(self.d_alloc_order) // max(1, len(self.d_alloc_order)))
+
+            # If gating_scale wasn't explicitly provided, compute it from gating_fraction
+            # so that the sigmoid transition width is approximately `gating_fraction * d_per_layer`.
+            # Use the mean per-group allocation for the computation so gating_scale is reasonable.
+            mean_d_group = max(1, self.d_per_layer)
+            if self.gating_scale is None:
+                if self.gating_fraction is not None:
+                    try:
+                        f = float(self.gating_fraction)
+                    except Exception:
+                        f = None
+                    if f is not None and f > 0:
+                        # avoid division by zero, clamp minimum fraction
+                        f = max(f, 1e-4)
+                        computed = 9.2 / (f * mean_d_group)
+                        # keep the scale in a reasonable numeric range
+                        self.gating_scale = float(max(0.01, min(computed, 1e3)))
+                    else:
+                        # fallback default
+                        self.gating_scale = 5.0
+                else:
+                    # fallback default if neither gating_scale nor fraction provided
+                    self.gating_scale = 5.0
+            
+            # Create params for each layer using the computed per-group allocation
+            for idx, layer_idx in enumerate(self.layers):
+                layer_key = str(layer_idx)
+
                 # Find params for this layer
                 layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
                 layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_idx}.' in n]
                 layer_params_B = [p for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
                 layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_idx}.' in n]
-                
+
                 if not layer_params_A and not layer_params_B:
                     continue
 
-                # Gating parameter for this layer
-                self.gating_params[layer_key] = nn.Parameter(torch.zeros(1)) 
-                
-                # Projectors
+                # Gating parameter for this layer (small random init to break symmetry)
+                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std)
+
+                # Projectors: use the allocated d for this group
+                d_alloc = self.d_alloc_order[idx]
                 D_A = sum(p.numel() for p in layer_params_A)
                 D_B = sum(p.numel() for p in layer_params_B)
-                
-                if D_A > 0:
-                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, self.d_per_layer, layer_params_A, layer_names_A)
-                if D_B > 0:
-                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, self.d_per_layer, layer_params_B, layer_names_B)
 
-            # Create params for misc group
+                if D_A > 0:
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
+                if D_B > 0:
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
+
+            # Create params for misc group (if present). The misc allocation is last in d_alloc_order
             if self.has_misc:
                 layer_key = 'misc'
-                
+
                 # Find params NOT in any layer
                 layer_params_A = [p for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                 layer_names_A = [n for n, p in self.param_groups['A']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                 layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                 layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
-                
-                self.gating_params[layer_key] = nn.Parameter(torch.zeros(1))
-                
+
+                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std)
+
+                d_alloc = self.d_alloc_order[-1]
                 D_A = sum(p.numel() for p in layer_params_A)
                 D_B = sum(p.numel() for p in layer_params_B)
-                
+
                 if D_A > 0:
-                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, self.d_per_layer, layer_params_A, layer_names_A)
+                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
                 if D_B > 0:
-                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, self.d_per_layer, layer_params_B, layer_names_B)
+                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
 
         else:
             # Fixed Global Split
@@ -894,18 +1004,25 @@ class StructuredIDModule(nn.Module):
 
     def forward(self, *args, **kwargs):
         if self.mode == 'learned':
+            # If annealing is configured and auto_step enabled, advance the annealer.
+            if self.gating_anneal is not None and self.gating_anneal.get('auto_step', True):
+                try:
+                    self.step_gating_anneal()
+                except Exception:
+                    # be robust: don't break forward pass if annealer misconfigured
+                    pass
             # Layer-wise learned gating with Soft Masking
-            
+
             # Helper to process a group
-            def process_group(layer_key, alpha, gamma):
-                # Soft Masking
-                indices = torch.arange(self.d_per_layer, device=alpha.device)
-                k = gamma * self.d_per_layer
-                mask = torch.sigmoid(10 * (k - indices))
-                
+            def process_group(layer_key, alpha, gamma, d_alloc):
+                # Soft Masking using the actual allocation size for this group
+                indices = torch.arange(d_alloc, device=alpha.device, dtype=alpha.dtype)
+                k = gamma * d_alloc
+                mask = torch.sigmoid(self.gating_scale * (k - indices))
+
                 alpha_B = alpha * mask
                 alpha_A = alpha * (1 - mask)
-                
+
                 if f'{layer_key}_A' in self.projectors:
                     flat_A = self.projectors[f'{layer_key}_A'] @ alpha_A
                     if layer_key == 'misc':
@@ -915,7 +1032,7 @@ class StructuredIDModule(nn.Module):
                         layer_params_A = [p for n, p in self.param_groups['A']['items'] if f'.h.{layer_key}.' in n]
                         layer_names_A = [n for n, p in self.param_groups['A']['items'] if f'.h.{layer_key}.' in n]
                     self._set_params(flat_A, layer_names_A, layer_params_A)
-                
+
                 if f'{layer_key}_B' in self.projectors:
                     flat_B = self.projectors[f'{layer_key}_B'] @ alpha_B
                     if layer_key == 'misc':
@@ -926,23 +1043,27 @@ class StructuredIDModule(nn.Module):
                         layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_key}.' in n]
                     self._set_params(flat_B, layer_names_B, layer_params_B)
 
-            # Process layers
+            # Process layers using variable allocations from d_alloc_order
+            cumulative_idx = 0
             for i, layer_idx in enumerate(self.layers):
                 layer_key = str(layer_idx)
-                start_idx = i * self.d_per_layer
-                end_idx = start_idx + self.d_per_layer
+                d_alloc = self.d_alloc_order[i]
+                start_idx = cumulative_idx
+                end_idx = start_idx + d_alloc
                 alpha = self.subspace_params[start_idx:end_idx]
                 gamma = torch.sigmoid(self.gating_params[layer_key])
-                process_group(layer_key, alpha, gamma)
-            
+                process_group(layer_key, alpha, gamma, d_alloc)
+                cumulative_idx = end_idx
+
             # Process misc
             if self.has_misc:
                 layer_key = 'misc'
-                start_idx = len(self.layers) * self.d_per_layer
-                end_idx = start_idx + self.d_per_layer
+                d_alloc = self.d_alloc_order[-1]  # misc is always last
+                start_idx = cumulative_idx
+                end_idx = start_idx + d_alloc
                 alpha = self.subspace_params[start_idx:end_idx]
                 gamma = torch.sigmoid(self.gating_params[layer_key])
-                process_group(layer_key, alpha, gamma)
+                process_group(layer_key, alpha, gamma, d_alloc)
                     
         else:
             # Fixed Global Split
@@ -965,6 +1086,69 @@ class StructuredIDModule(nn.Module):
             p = init + proj_param.view(*init.shape)
             _setchainattr(self._forward_net[0], p_name, p)
 
+    # --- Gating annealing helpers ---
+    def set_gating_scale(self, value: float):
+        """Set the gating sigmoid scale (slope/temperature inverse).
+
+        Args:
+            value: positive float for sigmoid multiplier.
+        """
+        try:
+            self.gating_scale = float(value)
+        except Exception:
+            raise ValueError("gating_scale must be a numeric value")
+
+    def get_gating_scale(self) -> float:
+        return float(self.gating_scale)
+
+    def step_gating_anneal(self, step: int = None):
+        """Advance or set the annealer and update `self.gating_scale`.
+
+        If `step` is None, the internal counter `_anneal_step` is incremented by one.
+        Otherwise `_anneal_step` is set to `step`.
+
+        The `gating_anneal` config must provide `total_steps` and `end` at minimum.
+        Supported modes: 'linear', 'cosine'.
+        """
+        cfg = self.gating_anneal
+        if cfg is None:
+            return self.gating_scale
+
+        if step is None:
+            self._anneal_step += 1
+        else:
+            self._anneal_step = int(step)
+
+        start = cfg.get('start', None)
+        end = cfg.get('end', None)
+        total = cfg.get('total_steps', None)
+        mode = cfg.get('mode', 'linear')
+
+        if total is None or end is None:
+            # Nothing to do if required keys missing
+            return self.gating_scale
+
+        # If start is not provided, use current gating_scale as start
+        if start is None:
+            start = float(self.gating_scale)
+
+        # clamp step
+        t = min(1.0, max(0.0, float(self._anneal_step) / float(total))) if total > 0 else 1.0
+
+        if mode == 'linear':
+            new_scale = float(start) + (float(end) - float(start)) * t
+        elif mode == 'cosine':
+            # smooth cosine schedule from start -> end
+            cos_t = 0.5 * (1.0 - math.cos(math.pi * t))
+            new_scale = float(start) + (float(end) - float(start)) * cos_t
+        else:
+            # default to linear if unknown
+            new_scale = float(start) + (float(end) - float(start)) * t
+
+        # ensure numeric sanity
+        self.gating_scale = float(max(1e-6, min(new_scale, 1e6)))
+        return self.gating_scale
+
     def to(self, *args, **kwargs):
         self._forward_net[0].to(*args, **kwargs)
         # Move init params
@@ -986,40 +1170,88 @@ class StructuredIDModule(nn.Module):
             n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
             return n_params
         else:
-            n_params = sum(p.numel() for p in self.parameters())    
+            n_params = sum(p.numel() for p in self.parameters())
             return n_params
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        for _ in range(max_new_tokens):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self._forward_net[0].config.block_size else idx[:, -self._forward_net[0].config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            logits, _ = self(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits[:, -1, :] / temperature
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
+            # append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type, correct_bias, adam_epislon, no_decay_bias):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+
+        # Separate gating params (will get a special LR multiplier)
+        gating_param_names = [pn for pn in param_dict.keys() if pn.startswith('gating_params')]
+        gating_params = [param_dict[pn] for pn in gating_param_names]
+
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        optim_groups = []
         if not no_decay_bias:
-            optim_groups = [
-                {'params': [p for n, p in param_dict.items()], 'weight_decay': weight_decay},
-            ]
-            print("using all params")
+            # all params decayed except gating handled separately
+            normal_params = [p for pn, p in param_dict.items() if not pn.startswith('gating_params')]
+            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay})
+            if gating_params:
+                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+            print("using all params (with gating params grouped if present)")
         else:
-            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-            optim_groups = [
-                {'params': decay_params, 'weight_decay': weight_decay},
-                {'params': nodecay_params, 'weight_decay': 0.0}
-            ]
+            # split into decayed and non-decayed, then move gating params into dedicated groups
+            decay_params = [p for pn, p in param_dict.items() if (p.dim() >= 2 and not pn.startswith('gating_params'))]
+            nodecay_params = [p for pn, p in param_dict.items() if (p.dim() < 2 and not pn.startswith('gating_params'))]
+
+            if decay_params:
+                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay})
+            if nodecay_params:
+                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0})
+
+            # gating params: separate into decay vs nodecay depending on dim
+            if gating_params:
+                gating_decay = [p for p in gating_params if p.dim() >= 2]
+                gating_nodecay = [p for p in gating_params if p.dim() < 2]
+                if gating_decay:
+                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                if gating_nodecay:
+                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': learning_rate * self.gating_lr_mult})
+
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
             print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
             print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        
+
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
-        # optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, correct_bias=correct_bias, eps=adam_epislon, **extra_args)
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, eps=adam_epislon, **extra_args)
 
         print(f"using fused AdamW: {use_fused}")
+        if gating_param_names:
+            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr_mult={self.gating_lr_mult}")
 
         return optimizer

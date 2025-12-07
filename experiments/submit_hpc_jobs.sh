@@ -33,7 +33,7 @@ REPO_DIR="/scratch/${HPC_USER}/sublora-repo"
 SLURM_SCRIPT="$REPO_DIR/experiments/run_single_job.slurm"
 
 
-DIMS=${DIMS:-"20000 50000"}
+DIMS=${DIMS:-"10000 20000"}
 read -ra DIMS_ARR <<< "$DIMS"
 
 LOW_DIM=${DIMS_ARR[0]}
