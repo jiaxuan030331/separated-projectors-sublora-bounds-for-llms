@@ -289,6 +289,11 @@ class RandomMultiply(torch.autograd.Function):
                 )
         return grad_in, None, None, None
 
+    # Note: RandomMultiply breaks the full P matrix generation into chunks to
+    # save memory when D*d is very large. The same chunking pattern is used in
+    # the backward pass to ensure a correct stochastic estimator of the
+    # transpose action (and reproducible RNG behavior via FixedPytorchSeed).
+
 
 class LazyRandom(LinearOperator):
     def __init__(self, D, d, params, names, seed=_DEFAULT_SEED):
@@ -383,6 +388,12 @@ def RoundedDoubleKron(D, d, params, names, order=2, seed=_DEFAULT_SEED):
     rounded_D = int(np.floor(D ** (1 / order)))
     rounded_d = int(np.floor(d ** (1 / order)))
 
+    # The `RoundedDoubleKron` helper rounds D and d down to nearby integer
+    # powers so that we can build Kronecker-structured random factors. When
+    # exact powers do not cover the full dimension, we construct an `extra`
+    # block to fill the remainder and then form a `LazyDirectSum` so the
+    # operator still has shape (D, d). This strategy yields structured
+    # low-rank-ish blocks while handling non-perfect sizes gracefully.
     with FixedPytorchSeed(seed):
         seed = int(torch.randint(high=2**31, size=(1,))[0])
         Rs = []
@@ -774,6 +785,16 @@ class StructuredIDModule(nn.Module):
     Structured Intrinsic Dimensionality Module.
     Allows for asymmetric allocation of subspace dimensions to different parameter groups (e.g. A vs B matrices).
     """
+    # High-level overview:
+    # - `self.subspace_params` is a single global vector of length `d` (intrinsic dim)
+    # - For `mode=='learned'` we partition that vector into per-layer (+ misc) blocks
+    #   whose sizes are computed proportionally to the number of parameters in each
+    #   group. Each block (alpha) is fed through a projector that maps it into the
+    #   flattened init-parameter space for that group. Learned scalar gating logits
+    #   determine how the block is split between the A and B projector outputs.
+    # - We added defensive checks and a cap+redistribute mechanism to prevent a
+    #   single group (often `misc`) from consuming an excessively large share of
+    #   `d` which would create pathological internal shapes in the lazy projectors.
     def __init__(self, net, projector_factory, dimension=1000, allocation_config=None):
         super().__init__()
         self.d = dimension
@@ -788,6 +809,10 @@ class StructuredIDModule(nn.Module):
         # If neither is provided, we fall back to a reasonable default of 5.
         self.gating_scale = self.allocation_config.get('gating_scale', None)
         self.gating_fraction = self.allocation_config.get('gating_fraction', None)
+        # Note: the gating multiplier controls mask sharpness. Small values ->
+        # broad, smooth masks; large values -> near-binary splits. We provide
+        # `gating_fraction` as a convenience to compute a reasonable scale based
+        # on block sizes (so users don't have to tune the numeric sigmoid slope).
         # initialization std for gating params (small noise to break symmetry)
         self.gating_init_std = float(self.allocation_config.get('gating_init_std', 0.01))
         # multiplier for gating learning rate (creates a separate optimizer group)
@@ -899,6 +924,82 @@ class StructuredIDModule(nn.Module):
                         diff += 1
                 i += 1
 
+            # Explanation: `raw_alloc` is the integer-rounded proportional split.
+            # Rounding can create small off-by-N errors; the loop above restores
+            # the invariant sum(raw_alloc) == self.d by distributing the remainder
+            # or reducing entries (but never below 1). This keeps allocation
+            # deterministic and numerically consistent across runs.
+
+            # --- Cap + redistribution mitigation ---
+            # Optionally cap any single group's allocation to avoid pathological
+            # very large d_alloc values that can break composed lazy operators.
+            # Rationale: when one group (commonly `misc`) holds a very large d_alloc
+            # relative to its D, some lazy projector constructors (kron/perm/concat)
+            # can create internal block shapes that don't compose properly and
+            # lead to runtime matmul shape errors. Capping prevents those extreme
+            # imbalances while preserving proportional allocation for the rest.
+            max_group_d = self.allocation_config.get('max_group_d', None)
+            max_group_fraction = self.allocation_config.get('max_group_fraction', None)
+            # If user did not supply an explicit cap, compute a conservative default.
+            # This default prevents a single "misc" group from consuming a huge
+            # fraction of the intrinsic dimension while preserving proportionality.
+            # Default heuristic: cap = max(2048, d // (num_groups*2)).
+            if max_group_d is None:
+                try:
+                    default_cap = max(2048, int(max(1, self.d // max(1, num_groups * 2))))
+                except Exception:
+                    default_cap = None
+                # Only use the default cap if it is meaningfully smaller than the
+                # largest raw allocation (otherwise no need to cap).
+                if default_cap is not None and max(raw_alloc) > default_cap:
+                    max_group_d = default_cap
+                    print(f"[AllocationCap] no explicit cap provided — using default cap={max_group_d}")
+            if max_group_fraction is not None and max_group_d is None:
+                try:
+                    max_group_d = int(max(1, math.floor(self.d * float(max_group_fraction))))
+                except Exception:
+                    max_group_d = None
+
+            if max_group_d is not None:
+                cap = int(max(1, max_group_d))
+                # Collect surplus from groups exceeding cap
+                surplus = 0
+                for idx in range(len(raw_alloc)):
+                    if raw_alloc[idx] > cap:
+                        surplus += raw_alloc[idx] - cap
+                        raw_alloc[idx] = cap
+
+                # Redistribute surplus round-robin to groups under cap
+                num_groups = len(raw_alloc)
+                rr_idx = 0
+                while surplus > 0 and any(v < cap for v in raw_alloc):
+                    # Prefer spreading surplus evenly; add up to the remaining
+                    # capacity for each group in a round-robin pass.
+                    if raw_alloc[rr_idx] < cap:
+                        add = min(cap - raw_alloc[rr_idx], surplus)
+                        raw_alloc[rr_idx] += add
+                        surplus -= add
+                    rr_idx = (rr_idx + 1) % num_groups
+
+                # If surplus still remains (all groups at cap), we leave allocations as-is
+                # and later correct to preserve the total self.d by small adjustments.
+
+                # Fix any tiny rounding differences again so sum(raw_alloc) == self.d
+                diff = self.d - sum(raw_alloc)
+                i = 0
+                while diff != 0:
+                    idx = i % len(raw_alloc)
+                    if diff > 0:
+                        raw_alloc[idx] += 1
+                        diff -= 1
+                    else:
+                        if raw_alloc[idx] > 1:
+                            raw_alloc[idx] -= 1
+                            diff += 1
+                    i += 1
+
+                print(f"[AllocationCap] applied cap={cap}, d_allocs={raw_alloc}")
+
             # Map allocations to layer keys for later use
             self.d_alloc_map = {k: int(v) for k, v in zip(group_keys, raw_alloc)}
             # Keep a list in the same order as self.layers followed by misc (if present)
@@ -952,9 +1053,25 @@ class StructuredIDModule(nn.Module):
                 D_B = sum(p.numel() for p in layer_params_B)
 
                 if D_A > 0:
-                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
+                    proj_name = f'{layer_key}_A'
+                    proj = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
+                    self.projectors[proj_name] = proj
+                    try:
+                        P_attr = getattr(proj, 'P', None)
+                        P_shape = P_attr.shape if P_attr is not None and hasattr(P_attr, 'shape') else None
+                    except Exception:
+                        P_shape = None
+                    print(f"[ProjectorCreated] {proj_name}: D={D_A}, d_alloc={d_alloc}, repr={repr(proj)}, P_shape={P_shape}")
                 if D_B > 0:
-                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
+                    proj_name = f'{layer_key}_B'
+                    proj = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
+                    self.projectors[proj_name] = proj
+                    try:
+                        P_attr = getattr(proj, 'P', None)
+                        P_shape = P_attr.shape if P_attr is not None and hasattr(P_attr, 'shape') else None
+                    except Exception:
+                        P_shape = None
+                    print(f"[ProjectorCreated] {proj_name}: D={D_B}, d_alloc={d_alloc}, repr={repr(proj)}, P_shape={P_shape}")
 
             # Create params for misc group (if present). The misc allocation is last in d_alloc_order
             if self.has_misc:
@@ -973,9 +1090,25 @@ class StructuredIDModule(nn.Module):
                 D_B = sum(p.numel() for p in layer_params_B)
 
                 if D_A > 0:
-                    self.projectors[f'{layer_key}_A'] = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
+                    proj_name = f'{layer_key}_A'
+                    proj = projector_factory(D_A, d_alloc, layer_params_A, layer_names_A)
+                    self.projectors[proj_name] = proj
+                    try:
+                        P_attr = getattr(proj, 'P', None)
+                        P_shape = P_attr.shape if P_attr is not None and hasattr(P_attr, 'shape') else None
+                    except Exception:
+                        P_shape = None
+                    print(f"[ProjectorCreated] {proj_name}: D={D_A}, d_alloc={d_alloc}, repr={repr(proj)}, P_shape={P_shape}")
                 if D_B > 0:
-                    self.projectors[f'{layer_key}_B'] = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
+                    proj_name = f'{layer_key}_B'
+                    proj = projector_factory(D_B, d_alloc, layer_params_B, layer_names_B)
+                    self.projectors[proj_name] = proj
+                    try:
+                        P_attr = getattr(proj, 'P', None)
+                        P_shape = P_attr.shape if P_attr is not None and hasattr(P_attr, 'shape') else None
+                    except Exception:
+                        P_shape = None
+                    print(f"[ProjectorCreated] {proj_name}: D={D_B}, d_alloc={d_alloc}, repr={repr(proj)}, P_shape={P_shape}")
 
         else:
             # Fixed Global Split
@@ -1029,6 +1162,12 @@ class StructuredIDModule(nn.Module):
                 alpha_B = alpha * mask
                 alpha_A = alpha * (1 - mask)
 
+                # The code below applies each group's A and B projectors to
+                # the corresponding alpha slices. We perform lightweight
+                # defensive checks to surface mismatches early: some projector
+                # factories may not expose an explicit `.shape` and composed
+                # lazy operators can hide incompatible block shapes — raising
+                # an informative RuntimeError helps users adjust caps/configs.
                 if f'{layer_key}_A' in self.projectors:
                     proj = self.projectors[f'{layer_key}_A']
                     # Defensive check: ensure projector expects the same input dim as alpha
