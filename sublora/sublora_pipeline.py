@@ -298,6 +298,38 @@ class SubLoRA():
         t0 = time.time()
         local_iter_num = 0 # number of iterations in the lifetime of this process
         raw_model = self.model.module if self.ddp else self.model # unwrap DDP container if needed
+        # Setup gating trace logging (master process only)
+        self._gating_log_layers = None
+        self._gating_log_has_misc = False
+        self._gating_trace_path = None
+        if self.master_process:
+            try:
+                if hasattr(raw_model, 'gating_params') and len(raw_model.gating_params) > 0:
+                    # Determine layer ordering
+                    layers = getattr(raw_model, 'layers', None)
+                    has_misc = getattr(raw_model, 'has_misc', False)
+                    if layers is None:
+                        # Fallback: try to parse numeric keys from gating_params
+                        keys = list(raw_model.gating_params.keys())
+                        numeric = [int(k) for k in keys if str(k).isdigit()]
+                        layers = sorted(numeric)
+                    self._gating_log_layers = list(layers)
+                    self._gating_log_has_misc = bool(has_misc)
+                    # Prepare CSV header and write file
+                    header_fields = ['iter', 'gating_scale'] + [f'gamma_layer_{l}' for l in self._gating_log_layers]
+                    if self._gating_log_has_misc:
+                        header_fields.append('gamma_misc')
+                    gating_trace_path = os.path.join(self.out_dir, 'gating_trace.csv')
+                    self._gating_trace_path = gating_trace_path
+                    if not os.path.exists(gating_trace_path):
+                        with open(gating_trace_path, 'w') as f:
+                            f.write(','.join(header_fields) + '\n')
+                    print(f"[GatingLog] will write gating trace to {gating_trace_path}")
+            except Exception:
+                # be robust: do not interrupt training setup for logging failures
+                self._gating_log_layers = None
+                self._gating_log_has_misc = False
+                self._gating_trace_path = None
         while True:
             # determine and set the learning rate for this iteration
             lr = get_lr(iter_num, warmup_iters, learning_rate, lr_decay_iters, min_lr) if decay_lr else learning_rate
@@ -387,6 +419,71 @@ class SubLoRA():
                 lossf = loss.item() * gradient_accumulation_steps
                 iters_per_sec = 1.0 / dt if dt > 0 else 0.0
                 print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, {iters_per_sec:.2f} it/s")
+                # Log gating parameters (gamma) if available
+                try:
+                    if hasattr(raw_model, 'gating_params') and self._gating_log_layers is not None:
+                        # compute gammas for layers
+                        gammas = []
+                        for l in self._gating_log_layers:
+                            key = str(l)
+                            if key in raw_model.gating_params:
+                                val = raw_model.gating_params[key]
+                                g = torch.sigmoid(val).item()
+                            else:
+                                # fallback: try integer key as index
+                                try:
+                                    val = raw_model.gating_params[list(raw_model.gating_params.keys())[0]]
+                                    g = torch.sigmoid(val).item()
+                                except Exception:
+                                    g = 0.5
+                            gammas.append(g)
+                        gmisc = None
+                        if self._gating_log_has_misc and 'misc' in raw_model.gating_params:
+                            gmisc = torch.sigmoid(raw_model.gating_params['misc']).item()
+                        gating_scale = float(getattr(raw_model, 'gating_scale', float('nan')))
+                        # Append to CSV
+                        if self._gating_trace_path is not None:
+                            with open(self._gating_trace_path, 'a') as f:
+                                row = [str(iter_num), f"{gating_scale:.6e}"] + [f"{g:.6f}" for g in gammas]
+                                if gmisc is not None:
+                                    row.append(f"{gmisc:.6f}")
+                                f.write(','.join(row) + '\n')
+                        # CSV write done above; wandb logging is handled per-iteration below
+                except Exception:
+                    # don't let logging interfere with training
+                    pass
+
+            # --- Per-iteration W&B logging (lightweight, runs every iteration) ---
+            # We intentionally separate CSV writes (less frequent) from W&B logs
+            # so that disk I/O stays low while still reporting per-step traces.
+            try:
+                if self.master_process and self.wandb_log and hasattr(raw_model, 'gating_params') and self._gating_log_layers is not None:
+                    gammas = []
+                    for l in self._gating_log_layers:
+                        key = str(l)
+                        if key in raw_model.gating_params:
+                            val = raw_model.gating_params[key]
+                            g = torch.sigmoid(val).item()
+                        else:
+                            try:
+                                val = raw_model.gating_params[list(raw_model.gating_params.keys())[0]]
+                                g = torch.sigmoid(val).item()
+                            except Exception:
+                                g = 0.5
+                        gammas.append(g)
+                    log_dict = {f'gamma_layer_{l}': g for l, g in zip(self._gating_log_layers, gammas)}
+                    if self._gating_log_has_misc and 'misc' in raw_model.gating_params:
+                        log_dict['gamma_misc'] = torch.sigmoid(raw_model.gating_params['misc']).item()
+                    log_dict['gating_scale'] = float(getattr(raw_model, 'gating_scale', float('nan')))
+                    log_dict['iter'] = iter_num
+                    # Also include a light loss metric if available
+                    try:
+                        log_dict['loss'] = float(lossf)
+                    except Exception:
+                        pass
+                    wandb.log(log_dict)
+            except Exception:
+                pass
             iter_num += 1
             local_iter_num += 1
 

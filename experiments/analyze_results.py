@@ -624,6 +624,52 @@ def plot_learned_gating_trend(results_dir, budgets, seeds, output_dir):
     print(f"Saved learned gating trend: {output_path}")
 
 
+def plot_gating_time_series(results_dir, output_dir):
+    """
+    Search for `gating_trace.csv` files under `results_dir` and plot per-layer
+    gamma time series (one subplot per transformer layer).
+    """
+    results_dir = Path(results_dir)
+    for exp_dir in results_dir.iterdir():
+        if not exp_dir.is_dir():
+            continue
+        # Find any gating_trace.csv under this experiment directory
+        gating_files = list(exp_dir.rglob('gating_trace.csv'))
+        if not gating_files:
+            continue
+        for gf in gating_files:
+            try:
+                df = pd.read_csv(gf)
+            except Exception as e:
+                print(f"  Warning: could not read {gf}: {e}")
+                continue
+
+            # Identify gamma columns (exclude iter and gating_scale)
+            gamma_cols = [c for c in df.columns if c.startswith('gamma_layer_') or c == 'gamma_misc']
+            if not gamma_cols:
+                continue
+
+            num_layers = len(gamma_cols)
+            # Create subplots vertically stacked
+            fig, axes = plt.subplots(num_layers, 1, figsize=(10, 2.2 * num_layers), sharex=True)
+            if num_layers == 1:
+                axes = [axes]
+
+            for i, col in enumerate(gamma_cols):
+                axes[i].plot(df['iter'], df[col], linewidth=1.5)
+                axes[i].set_ylabel(col)
+                axes[i].set_ylim(0, 1)
+                axes[i].grid(True, alpha=0.3)
+
+            axes[-1].set_xlabel('Iteration')
+            fig.suptitle(f'Gating γ over time: {exp_dir.name} ({gf.parent.name})')
+            out_path = Path(output_dir) / f'gating_trace_{exp_dir.name}_{gf.parent.name}.png'
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"Saved gating trace plot: {out_path}")
+
+
 def plot_compression_comparison(df, budget, output_dir):
     """
     Create multi-panel plot comparing compression methods (similar to SubLoRA paper Figure).
@@ -958,6 +1004,10 @@ def main():
     # Generate learned gating trends
     print("\n[6/8] Generating learned gating trend plots...")
     plot_learned_gating_trend(args.results_dir, args.budgets, args.seeds, args.output_dir)
+
+    # Generate gating time-series plots if available
+    print("\n[6.5/8] Generating gating time-series plots (per-iteration)...")
+    plot_gating_time_series(args.results_dir, args.output_dir)
 
     # Generate summary table
     print("\n[7/8] Generating summary tables...")
