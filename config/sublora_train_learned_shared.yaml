@@ -1,0 +1,51 @@
+login:
+  wandb_log: False
+  wandb_project: SubLoRA_LearnedShared
+  wandb_run_name: training 
+  out_dir: ./out_learned_shared
+data:
+  batch_size: 12
+  block_size: 1024
+  perturb_word_order_window_size: 0
+  dataset_dir: /workspace/separated-projectors-sublora-bounds-for-llms/data
+training:
+  gradient_accumulation_steps: 5
+  max_iters: 200
+  eval_interval: 50
+  eval_iters: 5 
+  log_interval: 10
+  always_save_checkpoint: False 
+optimizer: 
+  beta1: 0.9 
+  beta2: 0.999
+  learning_rate: 4e-3
+  weight_decay: 1e-2 
+  correct_bias: True 
+  adam_epislon: 1e-06
+  no_decay_bias: False
+learning_rate: 
+  lr_decay_iters: 200
+model:
+  n_layer: 12
+  n_head: 12
+  n_embd: 768
+  apply_rope: False
+  use_mistral_sliding_window: False
+  init_from: scratch
+  model_size: small
+sublora:
+  use_lora: True
+  lora_alpha: 32
+  lora_dropout: 0.0
+  attention_linear_use_lora: True
+  attention_linear_lora_r: 4
+  linear_head_lora_r: 4
+  linear_head_enable_lora: True
+  intrinsic_dim: 50000
+  allocation_mode: learned_shared
+  allocation_ratio: 0.5
+  gating_lr: 0.01         # absolute lr for gating params (independent of subspace lr)
+  gating_scale: 5.0       # sigmoid sharpness for A/B split (can anneal 1->10)
+system:
+  compile: False
+  dtype: bfloat16

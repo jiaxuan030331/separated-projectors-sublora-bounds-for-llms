@@ -109,6 +109,9 @@ Section("sublora", "LoRA and subspace Settings").params(
     intrinsic_dim=Param(int, "subspace intrinsic dimensionality", default=0),
     allocation_mode=Param(str, "allocation mode: uniform, fixed, learned", default="uniform"),
     allocation_ratio=Param(float, "ratio of d_B / (d_A + d_B) for fixed allocation", default=0.5),
+    gating_lr=Param(float, "absolute learning rate for gating params", default=0.01),
+    gating_scale=Param(float, "sigmoid scale for soft masking (can be annealed)", default=5.0),
+    gating_init_bias=Param(float, "initial bias for gating params (1.386=B-heavy gamma~0.8, -1.386=A-heavy gamma~0.2)", default=0.0),
 )
 
 Section("system", "system details").params(
@@ -156,6 +159,9 @@ class SubLoRA():
     @param("sublora.linear_head_enable_lora")
     @param("sublora.allocation_mode")
     @param("sublora.allocation_ratio")
+    @param("sublora.gating_lr")
+    @param("sublora.gating_scale")
+    @param("sublora.gating_init_bias")
     @param("model.model_size")
     @param("model.model_name_or_path")
     @param("system.dtype")
@@ -165,7 +171,7 @@ class SubLoRA():
     def __init__(self, yaml_config, dataset, dataset_dir, block_size, batch_size, perturb_word_order_window_size, init_from, 
                  n_layer, n_head, n_embd, bias, dropout, use_mergedlinear, apply_rope, use_mistral_sliding_window, use_lora, 
                  lora_alpha, lora_dropout, intrinsic_dim, attention_linear_use_lora, attention_linear_lora_r, linear_head_lora_r,
-                 linear_head_enable_lora, allocation_mode, allocation_ratio, model_size, model_name_or_path, dtype, eval_batch_size, seed, best_checkpoint_path=None):
+                 linear_head_enable_lora, allocation_mode, allocation_ratio, gating_lr, gating_scale, gating_init_bias, model_size, model_name_or_path, dtype, eval_batch_size, seed, best_checkpoint_path=None):
         
         ### Change lora config here to train without lora if the rank for both attention and head = 0 
         
@@ -207,7 +213,10 @@ class SubLoRA():
         
         allocation_config = {
             'mode': allocation_mode,
-            'ratio': allocation_ratio
+            'ratio': allocation_ratio,
+            'gating_lr': gating_lr,
+            'gating_scale': gating_scale,
+            'gating_init_bias': gating_init_bias,
         }
 
         self.model, self.iter_num, self.best_val_loss, self.model_args, self.nparams  = get_model(n_layer, n_head, n_embd, bias, dropout,
@@ -334,6 +343,9 @@ class SubLoRA():
             # determine and set the learning rate for this iteration
             lr = get_lr(iter_num, warmup_iters, learning_rate, lr_decay_iters, min_lr) if decay_lr else learning_rate
             for param_group in optimizer.param_groups:
+                # Skip gating params - they have their own fixed lr set at optimizer creation
+                if param_group.get('is_gating', False):
+                    continue
                 param_group['lr'] = lr
 
             # evaluate the loss on train/val sets and write checkpoints
@@ -404,6 +416,23 @@ class SubLoRA():
             if grad_clip != 0.0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
+            
+            # === SAVE GRADIENTS BEFORE zero_grad ===
+            # Must capture gradient info here, before optimizer.zero_grad() clears them
+            _saved_grads = {}
+            _saved_gmisc_grad = None
+            if hasattr(raw_model, 'gating_params') and self._gating_log_layers is not None:
+                for l in self._gating_log_layers:
+                    key = str(l)
+                    if key in raw_model.gating_params:
+                        val = raw_model.gating_params[key]
+                        if val.grad is not None:
+                            _saved_grads[key] = val.grad.item()
+                if self._gating_log_has_misc and 'misc' in raw_model.gating_params:
+                    misc_param = raw_model.gating_params['misc']
+                    if misc_param.grad is not None:
+                        _saved_gmisc_grad = misc_param.grad.item()
+            
             # step the optimizer and scaler if training in fp16
             scaler.step(optimizer)
             scaler.update()
@@ -422,25 +451,64 @@ class SubLoRA():
                 # Log gating parameters (gamma) if available
                 try:
                     if hasattr(raw_model, 'gating_params') and self._gating_log_layers is not None:
-                        # compute gammas for layers
+                        # compute gammas for layers (use saved gradients from before zero_grad)
                         gammas = []
+                        grads = []
+                        grad_signs = []
                         for l in self._gating_log_layers:
                             key = str(l)
                             if key in raw_model.gating_params:
                                 val = raw_model.gating_params[key]
                                 g = torch.sigmoid(val).item()
+                                # Use saved gradient info (captured before zero_grad)
+                                if key in _saved_grads:
+                                    grad_val = _saved_grads[key]
+                                    grads.append(grad_val)
+                                    grad_signs.append('+' if grad_val > 0 else ('-' if grad_val < 0 else '0'))
+                                else:
+                                    grads.append(0.0)
+                                    grad_signs.append('?')
                             else:
-                                # fallback: try integer key as index
-                                try:
-                                    val = raw_model.gating_params[list(raw_model.gating_params.keys())[0]]
-                                    g = torch.sigmoid(val).item()
-                                except Exception:
-                                    g = 0.5
+                                g = 0.5
+                                grads.append(0.0)
+                                grad_signs.append('?')
                             gammas.append(g)
                         gmisc = None
+                        gmisc_grad = _saved_gmisc_grad  # Use saved value
                         if self._gating_log_has_misc and 'misc' in raw_model.gating_params:
-                            gmisc = torch.sigmoid(raw_model.gating_params['misc']).item()
+                            misc_param = raw_model.gating_params['misc']
+                            gmisc = torch.sigmoid(misc_param).item()
                         gating_scale = float(getattr(raw_model, 'gating_scale', float('nan')))
+                        
+                        # === ENHANCED CONSOLE LOGGING ===
+                        # 1. Print gamma values
+                        gamma_str = ', '.join([f'L{l}:{g:.4f}' for l, g in zip(self._gating_log_layers, gammas)])
+                        if gmisc is not None:
+                            gamma_str += f', misc:{gmisc:.4f}'
+                        print(f"  [Gamma] {gamma_str}")
+                        
+                        # 2. Print gradient magnitudes
+                        grad_str = ', '.join([f'L{l}:{abs(gr):.2e}' for l, gr in zip(self._gating_log_layers, grads)])
+                        if gmisc_grad is not None:
+                            grad_str += f', misc:{abs(gmisc_grad):.2e}'
+                        print(f"  [GradMag] {grad_str}")
+                        
+                        # 3. Print gradient direction (for direction consistency check)
+                        dir_str = ''.join(grad_signs)
+                        if gmisc_grad is not None:
+                            dir_str += ('+' if gmisc_grad > 0 else ('-' if gmisc_grad < 0 else '0'))
+                        # Track direction consistency
+                        if not hasattr(self, '_prev_grad_signs'):
+                            self._prev_grad_signs = None
+                        if self._prev_grad_signs is not None:
+                            consistent = sum(1 for a, b in zip(dir_str, self._prev_grad_signs) if a == b and a != '?' and a != '0')
+                            total = sum(1 for a in dir_str if a != '?' and a != '0')
+                            consistency_pct = (consistent / total * 100) if total > 0 else 0
+                            print(f"  [GradDir] {dir_str} (consistency: {consistency_pct:.0f}%)")
+                        else:
+                            print(f"  [GradDir] {dir_str}")
+                        self._prev_grad_signs = dir_str
+                        
                         # Append to CSV
                         if self._gating_trace_path is not None:
                             with open(self._gating_trace_path, 'a') as f:
@@ -449,8 +517,9 @@ class SubLoRA():
                                     row.append(f"{gmisc:.6f}")
                                 f.write(','.join(row) + '\n')
                         # CSV write done above; wandb logging is handled per-iteration below
-                except Exception:
+                except Exception as e:
                     # don't let logging interfere with training
+                    print(f"  [GatingLog] Error: {e}")
                     pass
 
             # --- Per-iteration W&B logging (lightweight, runs every iteration) ---

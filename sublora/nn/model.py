@@ -100,8 +100,7 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        # Disabled for compatibility with newer GPUs (e.g., RTX 5090 sm_120) where pre-compiled kernels may not work
-        self.flash = False  # hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         self.use_mistral_sliding_window = config.use_mistral_sliding_window
         self.block_id = block_id
 
