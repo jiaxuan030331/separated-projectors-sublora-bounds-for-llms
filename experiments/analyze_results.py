@@ -115,7 +115,7 @@ def find_quant_checkpoint(exp_dir):
 def find_best_checkpoint(exp_dir):
     """
     Find best_ckpt.pt in experiment directory, handling nested structure.
-    
+
     HPC directory structure:
         sublora-d{dim}-{mode}-seed{seed}/
         └── out/SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/
@@ -129,12 +129,35 @@ def find_best_checkpoint(exp_dir):
         str(exp_dir / 'out' / 'best_ckpt.pt'),
         str(exp_dir / 'best_ckpt.pt'),
     ]
-    
+
     for pattern in search_patterns:
         matches = glob.glob(pattern)
         if matches:
             return sorted(matches)[-1]
-    
+
+    return None
+
+
+def find_topk_indices_file(exp_dir):
+    """
+    Find top_k_indices_levels*.txt file in experiment directory.
+    """
+    search_patterns = [
+        # HPC nested structure
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'top_k_indices_levels*.txt'),
+    ]
+
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return sorted(matches)[-1]
+
     return None
 
 
@@ -951,15 +974,450 @@ def generate_summary_table(df, output_dir):
     return final_table
 
 
+def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 500, 1000]):
+    """
+    Histogram showing distribution of top-k indices in the subspace.
+    Reveals which regions of the d-dimensional space are most utilized.
+
+    Args:
+        results_dir: Directory with experimental results
+        budget: Intrinsic dimension (e.g., 10000, 20000)
+        seed: Random seed
+        output_dir: Directory to save plots
+        k_values: List of k values to plot (e.g., [100, 500, 1000])
+    """
+    # Find experiment directory
+    possible_names = [
+        f'sublora-d{budget}-learned-seed{seed}',
+        f'd{budget}_learned_seed{seed}',
+        f'sublora-dim{budget}-learned-seed{seed}',
+    ]
+
+    topk_file = None
+    for name in possible_names:
+        exp_dir = Path(results_dir) / name
+        if exp_dir.exists():
+            topk_file = find_topk_indices_file(exp_dir)
+            if topk_file:
+                break
+
+    if not topk_file or not os.path.exists(topk_file):
+        print(f"Warning: top_k_indices file not found for d={budget}, seed={seed}")
+        return
+
+    # Load top-k indices
+    try:
+        with open(topk_file, 'r') as f:
+            content = f.read().strip()
+            # Parse Python list format
+            top_k_indices = eval(content)
+            top_k_indices = np.array(top_k_indices)
+    except Exception as e:
+        print(f"Warning: Could not load top_k_indices file: {e}")
+        return
+
+    # Create figure with subplots for different k values
+    fig, axes = plt.subplots(1, len(k_values), figsize=(6 * len(k_values), 5))
+    if len(k_values) == 1:
+        axes = [axes]
+
+    for ax, k in zip(axes, k_values):
+        if k > len(top_k_indices):
+            k = len(top_k_indices)
+
+        indices_subset = top_k_indices[:k]
+
+        # Create histogram
+        num_bins = min(50, budget // 200)  # Adaptive number of bins
+        ax.hist(indices_subset, bins=num_bins, edgecolor='black', alpha=0.7, color='steelblue')
+
+        # Add vertical line at mean
+        mean_idx = np.mean(indices_subset)
+        ax.axvline(mean_idx, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_idx:.0f}')
+
+        ax.set_xlabel('Subspace Index', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+        ax.set_title(f'Top-{k} Index Distribution', fontsize=13, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(f'Subspace Index Distribution (d={budget}, seed={seed})', fontsize=15, fontweight='bold')
+    plt.tight_layout()
+
+    output_path = Path(output_dir) / f'topk_histogram_d{budget}_seed{seed}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved top-k histogram: {output_path}")
+
+
+def plot_magnitude_distribution(results_dir, budget, seed, output_dir):
+    """
+    Plot sorted magnitudes of subspace_params to show effective dimensionality.
+
+    Args:
+        results_dir: Directory with experimental results
+        budget: Intrinsic dimension
+        seed: Random seed
+        output_dir: Directory to save plots
+    """
+    # Find experiment directory and checkpoint
+    possible_names = [
+        f'sublora-d{budget}-learned-seed{seed}',
+        f'd{budget}_learned_seed{seed}',
+        f'sublora-dim{budget}-learned-seed{seed}',
+    ]
+
+    checkpoint_path = None
+    topk_file = None
+    for name in possible_names:
+        exp_dir = Path(results_dir) / name
+        if exp_dir.exists():
+            checkpoint_path = find_best_checkpoint(exp_dir)
+            topk_file = find_topk_indices_file(exp_dir)
+            if checkpoint_path and topk_file:
+                break
+
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
+        return
+
+    # Load checkpoint
+    try:
+        checkpoint = load_checkpoint(checkpoint_path)
+        # Extract subspace_params
+        if 'subspace_params' in checkpoint:
+            subspace_params = checkpoint['subspace_params']
+        elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
+            subspace_params = checkpoint['raw_model']['subspace_params']
+        elif 'model' in checkpoint:
+            # Try to find subspace_params in model state dict
+            state_dict = checkpoint['model']
+            subspace_params = state_dict.get('subspace_params', None)
+        else:
+            print(f"Warning: Could not find subspace_params in checkpoint")
+            return
+
+        if subspace_params is None:
+            print(f"Warning: subspace_params is None")
+            return
+
+        # Convert to numpy
+        if isinstance(subspace_params, torch.Tensor):
+            subspace_params = subspace_params.cpu().numpy()
+
+    except Exception as e:
+        print(f"Warning: Could not load checkpoint: {e}")
+        return
+
+    # Compute magnitudes and sort
+    magnitudes = np.abs(subspace_params)
+    sorted_magnitudes = np.sort(magnitudes)[::-1]  # Descending order
+
+    # Load top-k indices for reference
+    top_k_threshold = None
+    if topk_file and os.path.exists(topk_file):
+        try:
+            with open(topk_file, 'r') as f:
+                content = f.read().strip()
+                top_k_indices = eval(content)
+                if len(top_k_indices) > 0:
+                    # Get magnitude of the k-th largest element
+                    k = len(top_k_indices)
+                    top_k_threshold = sorted_magnitudes[min(k, len(sorted_magnitudes)-1)]
+        except:
+            pass
+
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Full sorted magnitudes (log scale)
+    indices = np.arange(1, len(sorted_magnitudes) + 1)
+    ax1.plot(indices, sorted_magnitudes, linewidth=1.5, color='steelblue')
+    ax1.set_xlabel('Rank (sorted by magnitude)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Magnitude |θ_i|', fontsize=12, fontweight='bold')
+    ax1.set_title('Sorted Subspace Parameter Magnitudes', fontsize=13, fontweight='bold')
+    ax1.set_yscale('log')
+    ax1.grid(True, alpha=0.3, which='both')
+
+    if top_k_threshold is not None:
+        ax1.axhline(top_k_threshold, color='red', linestyle='--', linewidth=2,
+                    label=f'Top-{k} threshold')
+        ax1.legend(fontsize=10)
+
+    # Plot 2: Cumulative percentage of total magnitude
+    cumsum_magnitudes = np.cumsum(sorted_magnitudes)
+    total_magnitude = cumsum_magnitudes[-1]
+    cumsum_percent = 100 * cumsum_magnitudes / total_magnitude
+
+    ax2.plot(indices, cumsum_percent, linewidth=2, color='darkgreen')
+    ax2.set_xlabel('Rank (sorted by magnitude)', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Cumulative % of Total Magnitude', fontsize=12, fontweight='bold')
+    ax2.set_title('Effective Dimensionality', fontsize=13, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    # Add reference lines
+    for pct in [50, 90, 95, 99]:
+        idx_pct = np.searchsorted(cumsum_percent, pct)
+        ax2.axhline(pct, color='gray', linestyle=':', alpha=0.5)
+        ax2.axvline(idx_pct, color='gray', linestyle=':', alpha=0.5)
+        ax2.text(idx_pct, pct + 2, f'{idx_pct} dims', fontsize=9, ha='center')
+
+    fig.suptitle(f'Subspace Parameter Magnitude Analysis (d={budget}, seed={seed})',
+                 fontsize=15, fontweight='bold')
+    plt.tight_layout()
+
+    output_path = Path(output_dir) / f'magnitude_distribution_d{budget}_seed{seed}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved magnitude distribution: {output_path}")
+
+
+def plot_sparsity_patterns(results_dir, budget, seed, output_dir, percentile_threshold=95):
+    """
+    Binary heatmap showing which indices are 'active' (above threshold).
+    Reveals structured sparsity patterns.
+
+    Args:
+        results_dir: Directory with experimental results
+        budget: Intrinsic dimension
+        seed: Random seed
+        output_dir: Directory to save plots
+        percentile_threshold: Percentile threshold for active indices (default: 95)
+    """
+    # Find checkpoint
+    possible_names = [
+        f'sublora-d{budget}-learned-seed{seed}',
+        f'd{budget}_learned_seed{seed}',
+        f'sublora-dim{budget}-learned-seed{seed}',
+    ]
+
+    checkpoint_path = None
+    for name in possible_names:
+        exp_dir = Path(results_dir) / name
+        if exp_dir.exists():
+            checkpoint_path = find_best_checkpoint(exp_dir)
+            if checkpoint_path:
+                break
+
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
+        return
+
+    # Load subspace_params
+    try:
+        checkpoint = load_checkpoint(checkpoint_path)
+        if 'subspace_params' in checkpoint:
+            subspace_params = checkpoint['subspace_params']
+        elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
+            subspace_params = checkpoint['raw_model']['subspace_params']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
+            subspace_params = state_dict.get('subspace_params', None)
+        else:
+            print(f"Warning: Could not find subspace_params")
+            return
+
+        if isinstance(subspace_params, torch.Tensor):
+            subspace_params = subspace_params.cpu().numpy()
+    except Exception as e:
+        print(f"Warning: Could not load checkpoint: {e}")
+        return
+
+    # Compute threshold
+    magnitudes = np.abs(subspace_params)
+    threshold = np.percentile(magnitudes, percentile_threshold)
+
+    # Create binary pattern
+    active_indices = magnitudes > threshold
+
+    # Reshape into 2D for visualization (sqrt grid)
+    grid_size = int(np.ceil(np.sqrt(len(subspace_params))))
+    padded_length = grid_size ** 2
+
+    # Pad with zeros if needed
+    if len(active_indices) < padded_length:
+        active_indices_padded = np.zeros(padded_length, dtype=bool)
+        active_indices_padded[:len(active_indices)] = active_indices
+    else:
+        active_indices_padded = active_indices[:padded_length]
+
+    pattern_2d = active_indices_padded.reshape(grid_size, grid_size)
+
+    # Create plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Plot 1: Binary sparsity pattern
+    im1 = ax1.imshow(pattern_2d, cmap='RdYlGn', aspect='auto', interpolation='nearest')
+    ax1.set_title(f'Sparsity Pattern (>{percentile_threshold}th percentile)',
+                  fontsize=13, fontweight='bold')
+    ax1.set_xlabel('Index (reshaped)', fontsize=11)
+    ax1.set_ylabel('Index (reshaped)', fontsize=11)
+
+    # Add colorbar
+    cbar1 = plt.colorbar(im1, ax=ax1)
+    cbar1.set_label('Active (1) / Inactive (0)', rotation=270, labelpad=20)
+
+    # Plot 2: Magnitude heatmap (log scale)
+    magnitudes_2d = np.zeros(padded_length)
+    magnitudes_2d[:len(magnitudes)] = magnitudes
+    if len(magnitudes) < padded_length:
+        magnitudes_2d[len(magnitudes):] = np.nan
+    magnitudes_2d = magnitudes_2d.reshape(grid_size, grid_size)
+
+    im2 = ax2.imshow(np.log10(magnitudes_2d + 1e-10), cmap='viridis', aspect='auto', interpolation='nearest')
+    ax2.set_title('Log Magnitude Heatmap', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('Index (reshaped)', fontsize=11)
+    ax2.set_ylabel('Index (reshaped)', fontsize=11)
+
+    cbar2 = plt.colorbar(im2, ax=ax2)
+    cbar2.set_label('log₁₀(|θ_i|)', rotation=270, labelpad=20)
+
+    # Add statistics
+    sparsity = 100 * np.sum(active_indices) / len(active_indices)
+    fig.suptitle(f'Sparsity Analysis (d={budget}, seed={seed})\n'
+                 f'Active indices: {np.sum(active_indices)} / {len(active_indices)} ({sparsity:.1f}%)',
+                 fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    output_path = Path(output_dir) / f'sparsity_pattern_d{budget}_seed{seed}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved sparsity pattern: {output_path}")
+
+
+def plot_index_stability_across_seeds(results_dir, budget, seeds, output_dir, k=1000):
+    """
+    Analyze which indices are consistently in top-k across different seeds.
+    Shows stable vs unstable dimensions.
+
+    Args:
+        results_dir: Directory with experimental results
+        budget: Intrinsic dimension
+        seeds: List of random seeds
+        output_dir: Directory to save plots
+        k: Number of top indices to consider
+    """
+    # Collect top-k indices for each seed
+    all_topk_indices = []
+    valid_seeds = []
+
+    for seed in seeds:
+        possible_names = [
+            f'sublora-d{budget}-learned-seed{seed}',
+            f'd{budget}_learned_seed{seed}',
+            f'sublora-dim{budget}-learned-seed{seed}',
+        ]
+
+        topk_file = None
+        for name in possible_names:
+            exp_dir = Path(results_dir) / name
+            if exp_dir.exists():
+                topk_file = find_topk_indices_file(exp_dir)
+                if topk_file:
+                    break
+
+        if not topk_file or not os.path.exists(topk_file):
+            print(f"Warning: top_k_indices file not found for d={budget}, seed={seed}")
+            continue
+
+        try:
+            with open(topk_file, 'r') as f:
+                content = f.read().strip()
+                top_k_indices = eval(content)
+                top_k_indices = np.array(top_k_indices[:k])
+                all_topk_indices.append(set(top_k_indices))
+                valid_seeds.append(seed)
+        except Exception as e:
+            print(f"Warning: Could not load top_k_indices for seed {seed}: {e}")
+            continue
+
+    if len(all_topk_indices) < 2:
+        print(f"Warning: Need at least 2 seeds for stability analysis, found {len(all_topk_indices)}")
+        return
+
+    # Compute overlap statistics
+    # Count how many seeds each index appears in
+    all_indices = set()
+    for indices_set in all_topk_indices:
+        all_indices.update(indices_set)
+
+    index_counts = {idx: 0 for idx in all_indices}
+    for indices_set in all_topk_indices:
+        for idx in indices_set:
+            index_counts[idx] += 1
+
+    # Create histogram of stability (how many seeds each index appears in)
+    stability_counts = np.array(list(index_counts.values()))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Histogram of stability
+    ax1.hist(stability_counts, bins=np.arange(0.5, len(valid_seeds) + 1.5, 1),
+             edgecolor='black', alpha=0.7, color='steelblue')
+    ax1.set_xlabel('Number of Seeds Index Appears In', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Number of Indices', fontsize=12, fontweight='bold')
+    ax1.set_title(f'Index Stability Across {len(valid_seeds)} Seeds', fontsize=13, fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Add statistics
+    n_stable = np.sum(stability_counts == len(valid_seeds))
+    n_unstable = np.sum(stability_counts == 1)
+    ax1.text(0.95, 0.95, f'Stable (all seeds): {n_stable}\nUnstable (1 seed): {n_unstable}',
+             transform=ax1.transAxes, fontsize=10, verticalalignment='top',
+             horizontalalignment='right', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Plot 2: Pairwise Jaccard similarity between seeds
+    n_seeds = len(all_topk_indices)
+    jaccard_matrix = np.zeros((n_seeds, n_seeds))
+
+    for i in range(n_seeds):
+        for j in range(n_seeds):
+            if i == j:
+                jaccard_matrix[i, j] = 1.0
+            else:
+                intersection = len(all_topk_indices[i] & all_topk_indices[j])
+                union = len(all_topk_indices[i] | all_topk_indices[j])
+                jaccard_matrix[i, j] = intersection / union if union > 0 else 0
+
+    im = ax2.imshow(jaccard_matrix, cmap='YlOrRd', vmin=0, vmax=1, aspect='auto')
+    ax2.set_xticks(np.arange(n_seeds))
+    ax2.set_yticks(np.arange(n_seeds))
+    ax2.set_xticklabels([f'Seed {s}' for s in valid_seeds], rotation=45, ha='right')
+    ax2.set_yticklabels([f'Seed {s}' for s in valid_seeds])
+    ax2.set_title('Pairwise Jaccard Similarity\n(Top-k Index Overlap)', fontsize=13, fontweight='bold')
+
+    # Add text annotations
+    for i in range(n_seeds):
+        for j in range(n_seeds):
+            ax2.text(j, i, f'{jaccard_matrix[i, j]:.2f}',
+                    ha="center", va="center", color="black", fontsize=10)
+
+    cbar = plt.colorbar(im, ax=ax2)
+    cbar.set_label('Jaccard Similarity', rotation=270, labelpad=20)
+
+    fig.suptitle(f'Top-{k} Index Stability Analysis (d={budget})', fontsize=15, fontweight='bold')
+    plt.tight_layout()
+
+    output_path = Path(output_dir) / f'index_stability_d{budget}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved index stability plot: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Analyze adaptive subspace allocation experiments')
     parser.add_argument('--results_dir', type=str, default='out/adaptive_experiments',
                        help='Directory with experimental results')
     parser.add_argument('--output_dir', type=str, default='analysis_outputs',
                        help='Directory to save analysis outputs')
-    parser.add_argument('--budgets', type=int, nargs='+', default=[1000, 2000],
+    parser.add_argument('--budgets', type=int, nargs='+', default=[10000, 20000],
                        help='Subspace budgets to analyze')
-    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 123, 999],
+    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 123],
                        help='Random seeds used in experiments')
 
     args = parser.parse_args()
@@ -1009,29 +1467,70 @@ def main():
     print("\n[6.5/8] Generating gating time-series plots (per-iteration)...")
     plot_gating_time_series(args.results_dir, args.output_dir)
 
+    # Generate top-k index visualizations
+    print("\n[7/12] Generating top-k index histograms...")
+    for budget in args.budgets:
+        for seed in args.seeds:
+            plot_topk_histogram(args.results_dir, budget, seed, args.output_dir, k_values=[100, 500, 1000])
+
+    print("\n[8/12] Generating magnitude distribution plots...")
+    for budget in args.budgets:
+        for seed in args.seeds:
+            plot_magnitude_distribution(args.results_dir, budget, seed, args.output_dir)
+
+    print("\n[9/12] Generating sparsity pattern plots...")
+    for budget in args.budgets:
+        for seed in args.seeds:
+            plot_sparsity_patterns(args.results_dir, budget, seed, args.output_dir, percentile_threshold=95)
+
+    print("\n[10/12] Generating index stability analysis...")
+    for budget in args.budgets:
+        plot_index_stability_across_seeds(args.results_dir, budget, args.seeds, args.output_dir, k=1000)
+
     # Generate summary table
-    print("\n[7/8] Generating summary tables...")
+    print("\n[11/12] Generating summary tables...")
     summary_table = generate_summary_table(df, args.output_dir)
 
-    print("\n[8/8] Summary Statistics:")
+    print("\n[12/12] Summary Statistics:")
     print(summary_table.to_string(index=False))
 
     print("\n" + "=" * 80)
     print(f"ANALYSIS COMPLETE! Outputs saved to: {args.output_dir}")
     print("=" * 80)
     print("\n📊 Generated Visualizations:")
-    print(f"  1. pareto_frontier_d1000.png           - Complexity vs Risk (d=1000)")
-    print(f"  2. pareto_frontier_d2000.png           - Complexity vs Risk (d=2000)")
-    print(f"  3. compression_comparison_d1000.png    - 3-panel SubLoRA-style (d=1000)")
-    print(f"  4. compression_comparison_d2000.png    - 3-panel SubLoRA-style (d=2000)")
-    print(f"  5. allocation_comparison_grid.png      - 2x2 grid comparing all methods")
-    print(f"  6. learned_gating_heatmap_d1000.png    - Per-layer γ heatmap (d=1000)")
-    print(f"  7. learned_gating_heatmap_d2000.png    - Per-layer γ heatmap (d=2000)")
-    print(f"  8. learned_gating_trend.png            - γ trends across layers")
+    print(f"\n  Gating Analysis:")
+    print(f"    • learned_gating_heatmap_d*.png      - Per-layer γ heatmap")
+    print(f"    • learned_gating_trend.png           - γ trends across layers")
+    print(f"    • gating_trace_*.png                 - Per-iteration γ evolution")
+    print(f"\n  Complexity & Bounds:")
+    print(f"    • pareto_frontier_d*.png             - Complexity vs Risk")
+    print(f"    • compression_comparison_d*.png      - 3-panel SubLoRA-style")
+    print(f"    • allocation_comparison_grid.png     - 2x2 grid comparing methods")
+    print(f"\n  Top-K Index Analysis (NEW):")
+    print(f"    • topk_histogram_d*_seed*.png        - Index distribution histograms")
+    print(f"    • magnitude_distribution_d*_seed*.png - Sorted magnitudes & effective dim")
+    print(f"    • sparsity_pattern_d*_seed*.png      - Binary sparsity patterns")
+    print(f"    • index_stability_d*.png             - Cross-seed consistency")
     print(f"\n📋 Generated Tables:")
-    print(f"  9. summary_table.csv                   - Complete numerical results")
-    print(f" 10. summary_table.tex                   - LaTeX formatted table")
-    print(f"\n✅ Total: 10 output files ready for your paper!")
+    print(f"    • summary_table.csv                  - Complete numerical results")
+    print(f"    • summary_table.tex                  - LaTeX formatted table")
+
+    # Count total files
+    n_budgets = len(args.budgets)
+    n_seeds = len(args.seeds)
+    n_gating_heatmaps = n_budgets
+    n_pareto = n_budgets
+    n_compression = n_budgets
+    n_topk_hist = n_budgets * n_seeds
+    n_magnitude = n_budgets * n_seeds
+    n_sparsity = n_budgets * n_seeds
+    n_stability = n_budgets
+    n_gating_trace = n_budgets * n_seeds  # approximate
+
+    total_plots = (n_gating_heatmaps + 1 + n_pareto + n_compression + 1 +
+                   n_topk_hist + n_magnitude + n_sparsity + n_stability + n_gating_trace)
+
+    print(f"\n✅ Estimated total: {total_plots}+ plots + 2 tables ready for your paper!")
 
 
 if __name__ == '__main__':
