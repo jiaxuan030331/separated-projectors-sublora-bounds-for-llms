@@ -161,9 +161,10 @@ class IDModule(nn.Module):
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
 
-        # Separate gating params (will get a special LR multiplier)
+        # Separate gating params (will get a dedicated lr)
         gating_param_names = [pn for pn in param_dict.keys() if pn.startswith('gating_params')]
         gating_params = [param_dict[pn] for pn in gating_param_names]
+        gating_lr = getattr(self, 'gating_lr', learning_rate)  # fallback to base lr if not set
 
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
@@ -171,9 +172,9 @@ class IDModule(nn.Module):
         if not no_decay_bias:
             # all params decayed except gating handled separately
             normal_params = [p for pn, p in param_dict.items() if not pn.startswith('gating_params')]
-            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay})
+            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay, 'is_gating': False})
             if gating_params:
-                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': gating_lr, 'is_gating': True})
             print("using all params (with gating params grouped if present)")
         else:
             # split into decayed and non-decayed, then move gating params into dedicated groups
@@ -181,18 +182,18 @@ class IDModule(nn.Module):
             nodecay_params = [p for pn, p in param_dict.items() if (p.dim() < 2 and not pn.startswith('gating_params'))]
 
             if decay_params:
-                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay})
+                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay, 'is_gating': False})
             if nodecay_params:
-                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0})
+                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0, 'is_gating': False})
 
             # gating params: separate into decay vs nodecay depending on dim
             if gating_params:
                 gating_decay = [p for p in gating_params if p.dim() >= 2]
                 gating_nodecay = [p for p in gating_params if p.dim() < 2]
                 if gating_decay:
-                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': gating_lr, 'is_gating': True})
                 if gating_nodecay:
-                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': learning_rate * self.gating_lr_mult})
+                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': gating_lr, 'is_gating': True})
 
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
@@ -207,7 +208,7 @@ class IDModule(nn.Module):
 
         print(f"using fused AdamW: {use_fused}")
         if gating_param_names:
-            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr_mult={self.gating_lr_mult}")
+            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr={gating_lr}")
 
         return optimizer
 
@@ -315,8 +316,19 @@ class LazyRandomQR(LinearOperator):
     def __init__(self, D, d, params, names, seed=_DEFAULT_SEED):
         super().__init__(None, (D, d))
         self.info = (D, d, seed)
-        self.P = torch.randn(D, d)
-        self.P, _ = torch.linalg.qr(self.P, mode="reduced")
+        # QR decomposition: when D < d, reduced QR gives Q of shape (D, D) not (D, d).
+        # We handle this by orthogonalizing rows instead of columns.
+        if D <= d:
+            # Generate (D, d) random matrix and orthogonalize rows
+            # Use QR on P^T to get orthonormal columns, then transpose
+            self.P = torch.randn(D, d)
+            PT = self.P.T  # (d, D)
+            Q, _ = torch.linalg.qr(PT, mode="reduced")  # Q is (d, D)
+            self.P = Q.T  # (D, d) with orthonormal rows
+        else:
+            # D > d: standard QR gives Q of shape (D, d) with orthonormal columns
+            self.P = torch.randn(D, d)
+            self.P, _ = torch.linalg.qr(self.P, mode="reduced")
         self._cached_P = None  # Cache for device/dtype converted matrix
 
     def _get_P(self, v):
@@ -815,8 +827,11 @@ class StructuredIDModule(nn.Module):
         # on block sizes (so users don't have to tune the numeric sigmoid slope).
         # initialization std for gating params (small noise to break symmetry)
         self.gating_init_std = float(self.allocation_config.get('gating_init_std', 0.01))
-        # multiplier for gating learning rate (creates a separate optimizer group)
-        self.gating_lr_mult = float(self.allocation_config.get('gating_lr_mult', 5.0))
+        # initialization bias for gating params (controls initial gamma = sigmoid(bias))
+        # e.g., bias=1.386 gives gamma≈0.8 (B-heavy), bias=-1.386 gives gamma≈0.2 (A-heavy)
+        self.gating_init_bias = float(self.allocation_config.get('gating_init_bias', 0.0))
+        # absolute learning rate for gating params (separate from subspace_params lr)
+        self.gating_lr = float(self.allocation_config.get('gating_lr', 0.01))
         # Optional gating annealing configuration. If provided, should be a dict with keys:
         #   'start': initial scale (float) or None to use current computed scale
         #   'end': final scale (float)
@@ -1044,11 +1059,11 @@ class StructuredIDModule(nn.Module):
                 if not layer_params_A and not layer_params_B:
                     continue
 
-                # Gating parameter for this layer (small random init to break symmetry)
-                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std)
+                # Gating parameter for this layer (bias + small noise to break symmetry)
+                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std + self.gating_init_bias)
 
-                # Projectors: use the allocated d for this group
-                d_alloc = self.d_alloc_order[idx]
+                # Projectors: all layers share the full intrinsic dimension d
+                d_alloc = self.d  # shared intrinsic dim for all layers
                 D_A = sum(p.numel() for p in layer_params_A)
                 D_B = sum(p.numel() for p in layer_params_B)
 
@@ -1083,9 +1098,10 @@ class StructuredIDModule(nn.Module):
                 layer_params_B = [p for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
                 layer_names_B = [n for n, p in self.param_groups['B']['items'] if not re.search(r'\.h\.(\d+)\.', n)]
 
-                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std)
+                self.gating_params[layer_key] = nn.Parameter(torch.randn(1) * self.gating_init_std + self.gating_init_bias)
 
-                d_alloc = self.d_alloc_order[-1]
+                # Shared intrinsic dim for misc too
+                d_alloc = self.d
                 D_A = sum(p.numel() for p in layer_params_A)
                 D_B = sum(p.numel() for p in layer_params_B)
 
@@ -1153,9 +1169,15 @@ class StructuredIDModule(nn.Module):
             # Layer-wise learned gating with Soft Masking
 
             # Helper to process a group
-            def process_group(layer_key, alpha, gamma, d_alloc):
+            def process_group(layer_key, alpha, gating_param, d_alloc):
                 # Soft Masking using the actual allocation size for this group
+                # gating_param is the raw learnable parameter (before sigmoid)
                 indices = torch.arange(d_alloc, device=alpha.device, dtype=alpha.dtype)
+                
+                # Simple sigmoid computation:
+                # gamma controls the A/B split ratio (gamma -> 1 means more B)
+                # gating_scale controls sigmoid sharpness (can be annealed)
+                gamma = torch.sigmoid(gating_param)
                 k = gamma * d_alloc
                 mask = torch.sigmoid(self.gating_scale * (k - indices))
 
@@ -1228,27 +1250,17 @@ class StructuredIDModule(nn.Module):
                         layer_names_B = [n for n, p in self.param_groups['B']['items'] if f'.h.{layer_key}.' in n]
                     self._set_params(flat_B, layer_names_B, layer_params_B)
 
-            # Process layers using variable allocations from d_alloc_order
-            cumulative_idx = 0
+            # Process layers - all layers share the full subspace_params (no slicing)
+            alpha = self.subspace_params  # shared intrinsic dim for all layers
             for i, layer_idx in enumerate(self.layers):
                 layer_key = str(layer_idx)
-                d_alloc = self.d_alloc_order[i]
-                start_idx = cumulative_idx
-                end_idx = start_idx + d_alloc
-                alpha = self.subspace_params[start_idx:end_idx]
-                gamma = torch.sigmoid(self.gating_params[layer_key])
-                process_group(layer_key, alpha, gamma, d_alloc)
-                cumulative_idx = end_idx
+                # Pass gating_param directly (STE handles sigmoid internally)
+                process_group(layer_key, alpha, self.gating_params[layer_key], self.d)
 
-            # Process misc
+            # Process misc - also uses shared subspace_params
             if self.has_misc:
                 layer_key = 'misc'
-                d_alloc = self.d_alloc_order[-1]  # misc is always last
-                start_idx = cumulative_idx
-                end_idx = start_idx + d_alloc
-                alpha = self.subspace_params[start_idx:end_idx]
-                gamma = torch.sigmoid(self.gating_params[layer_key])
-                process_group(layer_key, alpha, gamma, d_alloc)
+                process_group(layer_key, alpha, self.gating_params[layer_key], self.d)
                     
         else:
             # Fixed Global Split
@@ -1391,7 +1403,7 @@ class StructuredIDModule(nn.Module):
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
 
-        # Separate gating params (will get a special LR multiplier)
+        # Separate gating params (will get a dedicated lr)
         gating_param_names = [pn for pn in param_dict.keys() if pn.startswith('gating_params')]
         gating_params = [param_dict[pn] for pn in gating_param_names]
 
@@ -1401,9 +1413,9 @@ class StructuredIDModule(nn.Module):
         if not no_decay_bias:
             # all params decayed except gating handled separately
             normal_params = [p for pn, p in param_dict.items() if not pn.startswith('gating_params')]
-            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay})
+            optim_groups.append({'params': normal_params, 'weight_decay': weight_decay, 'is_gating': False})
             if gating_params:
-                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                optim_groups.append({'params': gating_params, 'weight_decay': weight_decay, 'lr': self.gating_lr, 'is_gating': True})
             print("using all params (with gating params grouped if present)")
         else:
             # split into decayed and non-decayed, then move gating params into dedicated groups
@@ -1411,18 +1423,18 @@ class StructuredIDModule(nn.Module):
             nodecay_params = [p for pn, p in param_dict.items() if (p.dim() < 2 and not pn.startswith('gating_params'))]
 
             if decay_params:
-                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay})
+                optim_groups.append({'params': decay_params, 'weight_decay': weight_decay, 'is_gating': False})
             if nodecay_params:
-                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0})
+                optim_groups.append({'params': nodecay_params, 'weight_decay': 0.0, 'is_gating': False})
 
             # gating params: separate into decay vs nodecay depending on dim
             if gating_params:
                 gating_decay = [p for p in gating_params if p.dim() >= 2]
                 gating_nodecay = [p for p in gating_params if p.dim() < 2]
                 if gating_decay:
-                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': learning_rate * self.gating_lr_mult})
+                    optim_groups.append({'params': gating_decay, 'weight_decay': weight_decay, 'lr': self.gating_lr, 'is_gating': True})
                 if gating_nodecay:
-                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': learning_rate * self.gating_lr_mult})
+                    optim_groups.append({'params': gating_nodecay, 'weight_decay': 0.0, 'lr': self.gating_lr, 'is_gating': True})
 
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
@@ -1437,6 +1449,6 @@ class StructuredIDModule(nn.Module):
 
         print(f"using fused AdamW: {use_fused}")
         if gating_param_names:
-            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr_mult={self.gating_lr_mult}")
+            print(f"gating params grouped ({len(gating_param_names)} tensors), gating_lr={self.gating_lr}")
 
         return optimizer
