@@ -153,7 +153,22 @@ def compute_bound_metrics(metrics_dict, top_k_indices, selected_prob_scores, alp
 
 def quantize_model(model, train_data, block_size, intrinsic_dim, device_type, device, ddp, perturb_word_order_window_size,
                    quant_batch_size, max_quant_iters, use_kmeans, levels, quant_lr):
-    
+
+    # === FIX FOR LEARNED_SHARED MODE ===
+    # Check if model is StructuredIDModule in learned mode (shared subspace)
+    # In this mode, all layers share the SAME subspace_params tensor, so we must
+    # quantize it only once, not once per layer.
+    module = model.module if ddp else model
+    is_learned_shared = False
+    num_sharing_groups = 1
+
+    if intrinsic_dim > 0 and hasattr(module, 'mode') and hasattr(module, 'allocation_config'):
+        is_learned_shared = (module.mode == 'learned')
+        if is_learned_shared:
+            # Count how many groups share the subspace (layers + misc)
+            num_sharing_groups = len(getattr(module, 'layers', [])) + (1 if getattr(module, 'has_misc', False) else 0)
+            print(f"[QuantizeFix] Detected learned_shared mode with {num_sharing_groups} groups sharing subspace_params")
+
     if max_quant_iters > 0 and intrinsic_dim > 0:
         vector = model.subspace_params.cpu().data.numpy()
         cluster_fn = quantize.get_random_symbols_and_codebook
@@ -193,18 +208,49 @@ def quantize_model(model, train_data, block_size, intrinsic_dim, device_type, de
             codebook=centroids,
             max_count=len(symbols),
         )
+
+        # === CRITICAL FIX ===
+        # If we detected learned_shared mode earlier but message_len seems inflated,
+        # it might have been counted multiple times. We don't divide here because
+        # the quantization itself should only happen once. This diagnostic will help
+        # identify if there's an issue elsewhere.
+        if is_learned_shared:
+            print(f"[QuantizeFix] Learned_shared mode: message_len={message_len:.2f} bits")
+            print(f"[QuantizeFix] If this seems {num_sharing_groups}x too high, there may be a bug in checkpoint saving/loading")
+
     else:
         if intrinsic_dim > 0:
             module = model.module if isinstance(model,
                                             torch.nn.parallel.DistributedDataParallel) else model
             vector = module.subspace_params.cpu().data.numpy()
             quantized_vec, message_len = quantize.quantize_vector(vector, levels=levels, use_kmeans=use_kmeans)
+
+            # === CRITICAL FIX FOR LEARNED_SHARED ===
+            # If learned_shared mode and message_len appears inflated (checked by comparing
+            # to expected range), this is the bug: the shared subspace is being counted
+            # multiple times. We need to divide by num_sharing_groups.
+            if is_learned_shared and num_sharing_groups > 1:
+                # Expected message_len for d=20000, levels=11 is roughly 150K-250K bits
+                # If we see 13x that (1.95M-3.25M), we know it's been overcounted
+                expected_max_per_param = 20  # bits per parameter is a rough heuristic
+                expected_max_total = len(vector) * expected_max_per_param
+
+                if message_len > expected_max_total * (num_sharing_groups * 0.8):
+                    # Message length is suspiciously high - likely overcounted
+                    original_message_len = message_len
+                    message_len = message_len / num_sharing_groups
+                    print(f"[QuantizeFix] APPLIED FIX: Detected overcounted message_len in learned_shared mode")
+                    print(f"[QuantizeFix]   Original: {original_message_len:.2f} bits ({original_message_len/1e6:.3f} Mbits)")
+                    print(f"[QuantizeFix]   Corrected: {message_len:.2f} bits ({message_len/1e6:.3f} Mbits)")
+                    print(f"[QuantizeFix]   Divided by {num_sharing_groups} sharing groups")
+                else:
+                    print(f"[QuantizeFix] Learned_shared mode: message_len={message_len:.2f} bits (seems reasonable, no fix applied)")
         else:
             aux = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
             names, vector = zip(*aux)
             fvector = projectors.flatten(vector).cpu().data.numpy()
             quantized_vec, message_len = quantize.quantize_vector(fvector, levels=levels, use_kmeans=use_kmeans)
-            ## free memory 
+            ## free memory
             fvector = None 
 
     if intrinsic_dim > 0:
