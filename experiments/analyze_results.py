@@ -236,6 +236,9 @@ def extract_bounds_metrics(results_dir):
             if 'uniform' in name_lower:
                 mode = 'uniform'
                 ratio = 0.5
+            elif 'learned_shared' in name_lower or 'learned-shared' in name_lower:
+                mode = 'learned_shared'
+                ratio = None  # adaptive with shared projectors
             elif 'learned' in name_lower:
                 mode = 'learned'
                 ratio = None  # adaptive
@@ -453,8 +456,8 @@ def plot_pareto_frontier(df, budget, output_dir):
     # Filter by budget
     df_budget = df[df['budget'] == budget].copy()
 
-    # Average over seeds
-    df_avg = df_budget.groupby(['mode', 'ratio']).agg({
+    # Average over seeds (dropna=False to include learned mode with ratio=None)
+    df_avg = df_budget.groupby(['mode', 'ratio'], dropna=False).agg({
         'kl_divergence': ['mean', 'std'],
         'empirical_bpd': ['mean', 'std']
     }).reset_index()
@@ -468,6 +471,7 @@ def plot_pareto_frontier(df, budget, output_dir):
         'fixed_equal': {'color': 'green', 'marker': 'o', 'label': 'Fixed Equal (0.5)'},
         'fixed_aheavy': {'color': 'red', 'marker': 'v', 'label': 'Fixed A-heavy (0.2)'},
         'learned': {'color': 'purple', 'marker': '*', 'label': 'Learned Gating', 'markersize': 15},
+        'learned_shared': {'color': 'orange', 'marker': 'D', 'label': 'Learned Shared', 'markersize': 12},
     }
 
     # Create plot
@@ -702,7 +706,7 @@ def plot_compression_comparison(df, budget, output_dir):
     Right panel: Compression extent vs Bound/Risk
     """
     df_budget = df[df['budget'] == budget].copy()
-    df_avg = df_budget.groupby(['mode', 'ratio']).agg({
+    df_avg = df_budget.groupby(['mode', 'ratio'], dropna=False).agg({
         'kl_divergence': ['mean', 'std'],
         'empirical_bpd': ['mean', 'std'],
         'compressed_size_bits': ['mean', 'std'],
@@ -720,6 +724,7 @@ def plot_compression_comparison(df, budget, output_dir):
         'fixed_equal': {'color': '#50C878', 'marker': 'o', 'label': 'Fixed Equal', 'size': 100},
         'fixed_aheavy': {'color': '#E74C3C', 'marker': 'v', 'label': 'Fixed A-heavy', 'size': 100},
         'learned': {'color': '#9B59B6', 'marker': '*', 'label': 'Learned Gating', 'size': 200},
+        'learned_shared': {'color': '#F39C12', 'marker': 'D', 'label': 'Learned Shared', 'size': 150},
     }
 
     # Create figure with 3 panels
@@ -800,8 +805,8 @@ def plot_allocation_comparison_grid(df, output_dir):
     """
     Create 2x2 grid comparing different allocation strategies across metrics.
     """
-    # Average over seeds
-    df_avg = df.groupby(['budget', 'mode', 'ratio']).agg({
+    # Average over seeds (dropna=False to include learned mode with ratio=None)
+    df_avg = df.groupby(['budget', 'mode', 'ratio'], dropna=False).agg({
         'kl_divergence': ['mean', 'std'],
         'empirical_bpd': ['mean', 'std'],
         'compressed_size_bits': ['mean', 'std'],
@@ -822,6 +827,7 @@ def plot_allocation_comparison_grid(df, output_dir):
         'fixed_equal': '#50C878',
         'fixed_aheavy': '#E74C3C',
         'learned': '#9B59B6',
+        'learned_shared': '#F39C12',
     }
 
     mode_labels = {
@@ -830,6 +836,7 @@ def plot_allocation_comparison_grid(df, output_dir):
         'fixed_equal': 'Equal (0.5)',
         'fixed_aheavy': 'A-heavy (0.2)',
         'learned': 'Learned',
+        'learned_shared': 'Learned Shared',
     }
 
     # Create 2x2 grid
@@ -934,8 +941,8 @@ def generate_summary_table(df, output_dir):
     """
     Generate summary table with all experimental results.
     """
-    # Average over seeds
-    summary = df.groupby(['budget', 'mode', 'ratio']).agg({
+    # Average over seeds (dropna=False to include learned mode with ratio=None)
+    summary = df.groupby(['budget', 'mode', 'ratio'], dropna=False).agg({
         'empirical_bpd': ['mean', 'std'],
         'kl_divergence': ['mean', 'std'],
         'bound_value': ['mean', 'std'],
