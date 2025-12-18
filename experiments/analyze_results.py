@@ -983,8 +983,11 @@ def generate_summary_table(df, output_dir):
 
 def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 500, 1000]):
     """
-    Histogram showing distribution of top-k indices in the subspace.
-    Reveals which regions of the d-dimensional space are most utilized.
+    Histogram showing distribution of prediction ranks (top-k indices).
+    Shows where the correct token ranked in the model's predictions (0=top prediction).
+
+    NOTE: This measures prediction quality, NOT subspace dimension utilization.
+    Lower ranks = better predictions (rank 0 = perfect top-1 prediction).
 
     Args:
         results_dir: Directory with experimental results
@@ -1040,22 +1043,22 @@ def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 50
 
         # Add vertical line at mean
         mean_idx = np.mean(indices_subset)
-        ax.axvline(mean_idx, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_idx:.0f}')
+        ax.axvline(mean_idx, color='red', linestyle='--', linewidth=2, label=f'Mean Rank: {mean_idx:.0f}')
 
-        ax.set_xlabel('Subspace Index', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Prediction Rank (0=top prediction)', fontsize=12, fontweight='bold')
         ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
-        ax.set_title(f'Top-{k} Index Distribution', fontsize=13, fontweight='bold')
+        ax.set_title(f'Top-{k} Rank Distribution', fontsize=13, fontweight='bold')
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f'Subspace Index Distribution (d={budget}, seed={seed})', fontsize=15, fontweight='bold')
+    fig.suptitle(f'Prediction Rank Distribution (d={budget}, seed={seed})', fontsize=15, fontweight='bold')
     plt.tight_layout()
 
-    output_path = Path(output_dir) / f'topk_histogram_d{budget}_seed{seed}.png'
+    output_path = Path(output_dir) / f'prediction_rank_histogram_d{budget}_seed{seed}.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"Saved top-k histogram: {output_path}")
+    print(f"Saved prediction rank histogram: {output_path}")
 
 
 def plot_magnitude_distribution(results_dir, budget, seed, output_dir):
@@ -1474,8 +1477,8 @@ def main():
     print("\n[6.5/8] Generating gating time-series plots (per-iteration)...")
     plot_gating_time_series(args.results_dir, args.output_dir)
 
-    # Generate top-k index visualizations
-    print("\n[7/12] Generating top-k index histograms...")
+    # Generate prediction rank visualizations
+    print("\n[7/12] Generating prediction rank histograms...")
     for budget in args.budgets:
         for seed in args.seeds:
             plot_topk_histogram(args.results_dir, budget, seed, args.output_dir, k_values=[100, 500, 1000])
@@ -1513,10 +1516,10 @@ def main():
     print(f"    • pareto_frontier_d*.png             - Complexity vs Risk")
     print(f"    • compression_comparison_d*.png      - 3-panel SubLoRA-style")
     print(f"    • allocation_comparison_grid.png     - 2x2 grid comparing methods")
-    print(f"\n  Top-K Index Analysis (NEW):")
-    print(f"    • topk_histogram_d*_seed*.png        - Index distribution histograms")
-    print(f"    • magnitude_distribution_d*_seed*.png - Sorted magnitudes & effective dim")
-    print(f"    • sparsity_pattern_d*_seed*.png      - Binary sparsity patterns")
+    print(f"\n  Prediction Quality Analysis:")
+    print(f"    • prediction_rank_histogram_d*_seed*.png - Prediction rank distributions (0=top-1)")
+    print(f"    • magnitude_distribution_d*_seed*.png    - Sorted magnitudes & effective dim")
+    print(f"    • sparsity_pattern_d*_seed*.png          - Binary sparsity patterns")
     print(f"    • index_stability_d*.png             - Cross-seed consistency")
     print(f"\n📋 Generated Tables:")
     print(f"    • summary_table.csv                  - Complete numerical results")
