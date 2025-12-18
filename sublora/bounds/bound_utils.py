@@ -179,9 +179,18 @@ def quantize_model(model, train_data, block_size, intrinsic_dim, device_type, de
         centroids = centroids.to(device)
         quantizer_fn = quantize.Quantize().apply
         qw = quantize.QuantizingWrapper(model, quantizer=quantizer_fn, centroids=centroids)
-        optim = SGD(
-            [qw.subspace_params, qw.centroids],
-            lr = quant_lr, momentum=0.9)
+
+        # === FIX FOR LEARNED MODE: Include gating_params in optimizer ===
+        # If the model has gating_params (learned mode), we need to optimize them
+        # during quantization-aware training so they adapt to the quantized subspace
+        params_to_optimize = [qw.subspace_params, qw.centroids]
+        if is_learned_shared and hasattr(qw._forward_net[0], 'gating_params'):
+            # Add all gating parameters to the optimization
+            for gating_param in qw._forward_net[0].gating_params.values():
+                params_to_optimize.append(gating_param)
+            print(f"[QuantizeFix] Including {len(qw._forward_net[0].gating_params)} gating params in quantization-aware training")
+
+        optim = SGD(params_to_optimize, lr=quant_lr, momentum=0.9)
 
         for e in tqdm(range(max_quant_iters)):
             qw.train()
@@ -251,22 +260,43 @@ def quantize_model(model, train_data, block_size, intrinsic_dim, device_type, de
             fvector = projectors.flatten(vector).cpu().data.numpy()
             quantized_vec, message_len = quantize.quantize_vector(fvector, levels=levels, use_kmeans=use_kmeans)
             ## free memory
-            fvector = None 
+            fvector = None
+
+    # === FIX FOR LEARNED MODE: Include gating_params in message length ===
+    # In learned mode, gating_params are additional trainable parameters that
+    # must be included in the compression bound. They're stored as float32.
+    gating_message_len = 0
 
     if intrinsic_dim > 0:
         module = model.module if ddp else model
         module.subspace_params.data = torch.tensor(quantized_vec).float().to(device)
+
+        if is_learned_shared and hasattr(module, 'gating_params'):
+            num_gating_params = len(module.gating_params)
+            # Each gating param is a scalar float32 (32 bits)
+            gating_message_len = num_gating_params * 32
+            print(f"[QuantizeFix] Including {num_gating_params} gating params in message length:")
+            print(f"[QuantizeFix]   Gating params: {gating_message_len} bits ({gating_message_len/1e6:.6f} Mbits)")
     else:
         unfquantized_vec = projectors.unflatten_like(torch.tensor(quantized_vec), vector)
-        ## free memory  
+        ## free memory
         quantized_vec, vector = None, None
         for n, p in model.named_parameters():
             for name, quantp in zip(names, unfquantized_vec):
                 if n == name:
                     p.data = torch.tensor(quantp).float().to(device)
-            
-    prefix_message_len = message_len + 2 * np.log2(message_len) if message_len > 0 else 0
-    
+
+    # Include gating params in the total message length
+    total_message_len = message_len + gating_message_len
+    prefix_message_len = total_message_len + 2 * np.log2(total_message_len) if total_message_len > 0 else 0
+
+    if intrinsic_dim > 0 and is_learned_shared and gating_message_len > 0:
+        print(f"[QuantizeFix] Total message length:")
+        print(f"[QuantizeFix]   Subspace params: {message_len:.2f} bits ({message_len/1e6:.3f} Mbits)")
+        print(f"[QuantizeFix]   Gating params: {gating_message_len:.2f} bits ({gating_message_len/1e6:.6f} Mbits)")
+        print(f"[QuantizeFix]   Total: {total_message_len:.2f} bits ({total_message_len/1e6:.3f} Mbits)")
+        print(f"[QuantizeFix]   With prefix: {prefix_message_len:.2f} bits ({prefix_message_len/1e6:.3f} Mbits)")
+
     return model, prefix_message_len
 
 
