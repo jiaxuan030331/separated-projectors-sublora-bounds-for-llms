@@ -665,7 +665,7 @@ def create_intrinsic_model(
     net = None
     
     # Check if we should use StructuredIDModule
-    use_structured = allocation_config is not None and allocation_config.get('mode') in ['fixed', 'learned']
+    use_structured = allocation_config is not None and allocation_config.get('mode') in ['fixed', 'learned', 'learned_shared']
 
     if intrinsic_mode == "dense":
         if use_structured:
@@ -881,8 +881,8 @@ class StructuredIDModule(nn.Module):
         self.params_B = [p for n, p in self.param_groups['B']['items']]
         self.names_B = [n for n, p in self.param_groups['B']['items']]
         
-        if self.mode == 'learned':
-            # Layer-wise learned gating
+        if self.mode in ('learned', 'learned_shared'):
+            # Layer-wise learned gating (learned_shared: all layers share full d)
             # We assume d is split equally among layers for the base allocation
             
             # First, identify layers and misc params
@@ -1158,7 +1158,7 @@ class StructuredIDModule(nn.Module):
         return groups
 
     def forward(self, *args, **kwargs):
-        if self.mode == 'learned':
+        if self.mode in ('learned', 'learned_shared'):
             # If annealing is configured and auto_step enabled, advance the annealer.
             if self.gating_anneal is not None and self.gating_anneal.get('auto_step', True):
                 try:

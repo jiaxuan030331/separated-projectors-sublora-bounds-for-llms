@@ -51,8 +51,12 @@ def find_bounds_yaml(exp_dir):
     search_patterns = [
         # HPC nested structure: out/SubLoRA_Pretrain/id{dim}_lr0.005_r4/{date}/{time}/
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / 'id*' / '*' / '*' / 'bounds_levels*.yml'),
         # Alternative nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'bounds_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / '*' / '*' / '*' / 'bounds_levels*.yml'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'bounds_levels*.yml'),
         # Direct in out folder
         str(exp_dir / 'out' / 'bounds_levels*.yml'),
@@ -76,7 +80,11 @@ def find_metrics_yaml(exp_dir):
     search_patterns = [
         # HPC nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / 'id*' / '*' / '*' / 'metrics_levels*.yml'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'metrics_levels*.yml'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / '*' / '*' / '*' / 'metrics_levels*.yml'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'metrics_levels*.yml'),
         str(exp_dir / 'out' / 'metrics_levels*.yml'),
         str(exp_dir / 'metrics_levels*.yml'),
@@ -98,7 +106,11 @@ def find_quant_checkpoint(exp_dir):
     search_patterns = [
         # HPC nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / 'id*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'out' / 'quant_ckpt_levels*.pt'),
         str(exp_dir / 'quant_ckpt_levels*.pt'),
@@ -124,7 +136,11 @@ def find_best_checkpoint(exp_dir):
     search_patterns = [
         # HPC nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / 'id*' / '*' / '*' / 'best_ckpt.pt'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'best_ckpt.pt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / '*' / '*' / '*' / 'best_ckpt.pt'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'best_ckpt.pt'),
         str(exp_dir / 'out' / 'best_ckpt.pt'),
         str(exp_dir / 'best_ckpt.pt'),
@@ -146,8 +162,10 @@ def find_topk_indices_file(exp_dir):
         # HPC nested structure
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / 'id*' / '*' / '*' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / 'id*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / 'id*' / '*' / '*' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'out' / 'SubLoRA_Pretrain' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'out' / 'SubLoRA_LearnedShared' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
+        str(exp_dir / 'out' / 'SubLoRA_Learned' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'out' / '*' / '*' / '*' / '*' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'out' / 'top_k_indices_levels*.txt'),
         str(exp_dir / 'top_k_indices_levels*.txt'),
@@ -236,12 +254,9 @@ def extract_bounds_metrics(results_dir):
             if 'uniform' in name_lower:
                 mode = 'uniform'
                 ratio = 0.5
-            elif 'learned_shared' in name_lower or 'learned-shared' in name_lower:
-                mode = 'learned_shared'
-                ratio = None  # adaptive with shared projectors
             elif 'learned' in name_lower:
                 mode = 'learned'
-                ratio = None  # adaptive
+                ratio = None  # adaptive (shared projectors)
             elif 'bheavy' in name_lower:
                 mode = 'fixed_bheavy'
                 ratio = 0.8
@@ -471,7 +486,6 @@ def plot_pareto_frontier(df, budget, output_dir):
         'fixed_equal': {'color': 'green', 'marker': 'o', 'label': 'Fixed Equal (0.5)'},
         'fixed_aheavy': {'color': 'red', 'marker': 'v', 'label': 'Fixed A-heavy (0.2)'},
         'learned': {'color': 'purple', 'marker': '*', 'label': 'Learned Gating', 'markersize': 15},
-        'learned_shared': {'color': 'orange', 'marker': 'D', 'label': 'Learned Shared', 'markersize': 12},
     }
 
     # Create plot
@@ -724,7 +738,6 @@ def plot_compression_comparison(df, budget, output_dir):
         'fixed_equal': {'color': '#50C878', 'marker': 'o', 'label': 'Fixed Equal', 'size': 100},
         'fixed_aheavy': {'color': '#E74C3C', 'marker': 'v', 'label': 'Fixed A-heavy', 'size': 100},
         'learned': {'color': '#9B59B6', 'marker': '*', 'label': 'Learned Gating', 'size': 200},
-        'learned_shared': {'color': '#F39C12', 'marker': 'D', 'label': 'Learned Shared', 'size': 150},
     }
 
     # Create figure with 3 panels
@@ -801,6 +814,245 @@ def plot_compression_comparison(df, budget, output_dir):
     print(f"Saved compression comparison plot: {output_path}")
 
 
+def plot_bound_decomposition(df, budget, output_dir):
+    """
+    Create 3-panel scatter plot showing bound vs its three components:
+    Panel 1: Bound vs FP BPD (floating-point precision BPD)
+    Panel 2: Bound vs Quantization Loss (Q BPD - FP BPD)
+    Panel 3: Bound vs Complexity Term (Bound - Q BPD)
+    
+    Y-axis (unified): Final PAC-Bayes bound value
+    X-axis: Each component in BPD units
+    """
+    df_budget = df[df['budget'] == budget].copy()
+    
+    # Calculate FP BPD from val_loss
+    df_budget['fp_bpd'] = df_budget['val_loss'] / np.log(2)
+    
+    # Calculate quantization loss
+    df_budget['quant_loss'] = df_budget['empirical_bpd'] - df_budget['fp_bpd']
+    
+    # Calculate complexity term
+    df_budget['complexity_term'] = df_budget['bound_value'] - df_budget['empirical_bpd']
+    
+    # Average over seeds
+    df_avg = df_budget.groupby(['mode', 'ratio'], dropna=False).agg({
+        'fp_bpd': ['mean', 'std'],
+        'quant_loss': ['mean', 'std'],
+        'complexity_term': ['mean', 'std'],
+        'bound_value': ['mean', 'std']
+    }).reset_index()
+    
+    df_avg.columns = ['mode', 'ratio', 
+                      'fp_bpd_mean', 'fp_bpd_std',
+                      'quant_loss_mean', 'quant_loss_std',
+                      'complexity_mean', 'complexity_std',
+                      'bound_mean', 'bound_std']
+    
+    # Mode styles
+    mode_styles = {
+        'uniform': {'color': '#888888', 'marker': 's', 'label': 'Uniform (Baseline)', 'size': 150},
+        'fixed_bheavy': {'color': '#4A90E2', 'marker': '^', 'label': 'Fixed B-heavy', 'size': 150},
+        'fixed_equal': {'color': '#50C878', 'marker': 'o', 'label': 'Fixed Equal', 'size': 150},
+        'fixed_aheavy': {'color': '#E74C3C', 'marker': 'v', 'label': 'Fixed A-heavy', 'size': 150},
+        'learned': {'color': '#9B59B6', 'marker': '*', 'label': 'Learned Gating', 'size': 250},
+    }
+    
+    # Create figure with 3 panels
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Get y-axis limits (unified across all panels)
+    y_min = df_avg['bound_mean'].min() - 0.5
+    y_max = df_avg['bound_mean'].max() + 0.5
+    
+    # Panel 1: Bound vs FP BPD
+    ax1 = axes[0]
+    for mode, style in mode_styles.items():
+        df_mode = df_avg[df_avg['mode'] == mode]
+        if len(df_mode) == 0:
+            continue
+        ax1.scatter(df_mode['fp_bpd_mean'], df_mode['bound_mean'],
+                   c=style['color'], marker=style['marker'], s=style['size'],
+                   label=style['label'], alpha=0.8, edgecolors='black', linewidth=1.5)
+    
+    ax1.set_xlabel('FP BPD (Train)', fontsize=13, fontweight='bold')
+    ax1.set_ylabel('PAC-Bayes Bound (BPD)', fontsize=13, fontweight='bold')
+    ax1.set_title('Bound vs FP BPD', fontsize=14, fontweight='bold')
+    ax1.set_ylim(y_min, y_max)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc='best', fontsize=9, framealpha=0.9)
+    
+    # Panel 2: Bound vs Quantization Loss
+    ax2 = axes[1]
+    for mode, style in mode_styles.items():
+        df_mode = df_avg[df_avg['mode'] == mode]
+        if len(df_mode) == 0:
+            continue
+        ax2.scatter(df_mode['quant_loss_mean'], df_mode['bound_mean'],
+                   c=style['color'], marker=style['marker'], s=style['size'],
+                   alpha=0.8, edgecolors='black', linewidth=1.5)
+    
+    ax2.set_xlabel('Quantization Loss (BPD)', fontsize=13, fontweight='bold')
+    ax2.set_ylabel('PAC-Bayes Bound (BPD)', fontsize=13, fontweight='bold')
+    ax2.set_title('Bound vs Quantization Loss', fontsize=14, fontweight='bold')
+    ax2.set_ylim(y_min, y_max)
+    ax2.grid(True, alpha=0.3)
+    
+    # Panel 3: Bound vs Complexity Term
+    ax3 = axes[2]
+    for mode, style in mode_styles.items():
+        df_mode = df_avg[df_avg['mode'] == mode]
+        if len(df_mode) == 0:
+            continue
+        ax3.scatter(df_mode['complexity_mean'], df_mode['bound_mean'],
+                   c=style['color'], marker=style['marker'], s=style['size'],
+                   alpha=0.8, edgecolors='black', linewidth=1.5)
+    
+    ax3.set_xlabel('Complexity Term (BPD)', fontsize=13, fontweight='bold')
+    ax3.set_ylabel('PAC-Bayes Bound (BPD)', fontsize=13, fontweight='bold')
+    ax3.set_title('Bound vs Complexity Term', fontsize=14, fontweight='bold')
+    ax3.set_ylim(y_min, y_max)
+    ax3.grid(True, alpha=0.3)
+    
+    plt.suptitle(f'Bound Decomposition Analysis (d={budget})', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    output_path = Path(output_dir) / f'bound_decomposition_d{budget}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved bound decomposition plot: {output_path}")
+
+
+def plot_bound_decomposition_stacked(df, budget, output_dir):
+    """
+    Create stacked bar chart showing bound decomposition:
+    FP BPD (blue) + Quantization Loss (red) + Complexity Term (green) = Total Bound
+    """
+    df_budget = df[df['budget'] == budget].copy()
+    
+    # Calculate FP BPD from val_loss
+    df_budget['fp_bpd'] = df_budget['val_loss'] / np.log(2)
+    
+    # Calculate quantization loss
+    df_budget['quant_loss'] = df_budget['empirical_bpd'] - df_budget['fp_bpd']
+    
+    # Calculate complexity term
+    df_budget['complexity_term'] = df_budget['bound_value'] - df_budget['empirical_bpd']
+    
+    # Average over seeds
+    df_avg = df_budget.groupby(['mode', 'ratio'], dropna=False).agg({
+        'fp_bpd': ['mean', 'std'],
+        'quant_loss': ['mean', 'std'],
+        'complexity_term': ['mean', 'std'],
+        'bound_value': ['mean', 'std']
+    }).reset_index()
+    
+    df_avg.columns = ['mode', 'ratio', 
+                      'fp_bpd_mean', 'fp_bpd_std',
+                      'quant_loss_mean', 'quant_loss_std',
+                      'complexity_mean', 'complexity_std',
+                      'bound_mean', 'bound_std']
+    
+    # Define mode order and labels with colors
+    mode_order = ['uniform', 'fixed_bheavy', 'fixed_equal', 'fixed_aheavy', 'learned']
+    mode_labels = {
+        'uniform': ('Uniform', '#888888'),
+        'fixed_bheavy': ('B-heavy', '#4A90E2'),
+        'fixed_equal': ('Equal', '#50C878'),
+        'fixed_aheavy': ('A-heavy', '#E74C3C'),
+        'learned': ('Learned', '#9B59B6'),
+    }
+    
+    # Filter and order data
+    df_plot = df_avg[df_avg['mode'].isin(mode_order)].copy()
+    df_plot['mode_order'] = df_plot['mode'].map({m: i for i, m in enumerate(mode_order)})
+    df_plot = df_plot.sort_values('mode_order')
+    
+    if len(df_plot) == 0:
+        print(f"Warning: No data for stacked bar chart d={budget}")
+        return
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Bar positions
+    x = np.arange(len(df_plot))
+    width = 0.6
+    
+    # Colors for each component
+    colors = {
+        'fp_bpd': '#5B9BD5',      # Blue
+        'quant_loss': '#C0504D',   # Red
+        'complexity': '#70AD47',   # Green
+    }
+    
+    # Create stacked bars
+    bars_fp = ax.bar(x, df_plot['fp_bpd_mean'], width, 
+                     label='FP BPD (Train)', color=colors['fp_bpd'], edgecolor='white', linewidth=1)
+    bars_quant = ax.bar(x, df_plot['quant_loss_mean'], width,
+                        bottom=df_plot['fp_bpd_mean'],
+                        label='Quantization Loss', color=colors['quant_loss'], edgecolor='white', linewidth=1)
+    bars_complexity = ax.bar(x, df_plot['complexity_mean'], width,
+                             bottom=df_plot['fp_bpd_mean'] + df_plot['quant_loss_mean'],
+                             label='Complexity Term', color=colors['complexity'], edgecolor='white', linewidth=1)
+    
+    # Add value labels on each segment
+    for i, (idx, row) in enumerate(df_plot.iterrows()):
+        # FP BPD label (center of blue bar)
+        fp_center = row['fp_bpd_mean'] / 2
+        if row['fp_bpd_mean'] > 0.5:
+            ax.text(i, fp_center, f"{row['fp_bpd_mean']:.2f}", ha='center', va='center', 
+                   fontsize=10, color='white', fontweight='bold')
+        
+        # Quantization Loss label (center of red bar)
+        quant_center = row['fp_bpd_mean'] + row['quant_loss_mean'] / 2
+        if row['quant_loss_mean'] > 0.1:
+            ax.text(i, quant_center, f"{row['quant_loss_mean']:.2f}", ha='center', va='center', 
+                   fontsize=10, color='white', fontweight='bold')
+        
+        # Complexity Term label (center of green bar)
+        complexity_center = row['fp_bpd_mean'] + row['quant_loss_mean'] + row['complexity_mean'] / 2
+        if row['complexity_mean'] > 0.3:
+            ax.text(i, complexity_center, f"{row['complexity_mean']:.2f}", ha='center', va='center', 
+                   fontsize=10, color='white', fontweight='bold')
+        
+        # Total bound label (top of bar)
+        ax.text(i, row['bound_mean'] + 0.1, f"{row['bound_mean']:.2f}", ha='center', va='bottom', 
+               fontsize=11, color='black', fontweight='bold')
+    
+    # X-axis labels with colors
+    ax.set_xticks(x)
+    labels = [mode_labels.get(m, (m, 'black'))[0] for m in df_plot['mode']]
+    ax.set_xticklabels(labels, fontsize=12, fontweight='bold', rotation=30, ha='right')
+    
+    # Color the x-tick labels
+    for i, (mode, tick_label) in enumerate(zip(df_plot['mode'], ax.get_xticklabels())):
+        color = mode_labels.get(mode, (mode, 'black'))[1]
+        tick_label.set_color(color)
+    
+    # Labels and title
+    ax.set_ylabel('PAC-Bayes Bound (BPD)', fontsize=13, fontweight='bold')
+    ax.set_title(f'Bound Decomposition: FP BPD + Quantization Loss + Complexity (d={budget})', 
+                 fontsize=14, fontweight='bold')
+    
+    # Legend
+    ax.legend(loc='upper left', fontsize=11, framealpha=0.9)
+    
+    # Grid
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_axisbelow(True)
+    
+    # Y-axis limits
+    ax.set_ylim(0, df_plot['bound_mean'].max() * 1.1)
+    
+    plt.tight_layout()
+    output_path = Path(output_dir) / f'bound_decomposition_stacked_d{budget}.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved stacked bound decomposition plot: {output_path}")
+
+
 def plot_allocation_comparison_grid(df, output_dir):
     """
     Create 2x2 grid comparing different allocation strategies across metrics.
@@ -827,7 +1079,6 @@ def plot_allocation_comparison_grid(df, output_dir):
         'fixed_equal': '#50C878',
         'fixed_aheavy': '#E74C3C',
         'learned': '#9B59B6',
-        'learned_shared': '#F39C12',
     }
 
     mode_labels = {
@@ -836,7 +1087,6 @@ def plot_allocation_comparison_grid(df, output_dir):
         'fixed_equal': 'Equal (0.5)',
         'fixed_aheavy': 'A-heavy (0.2)',
         'learned': 'Learned',
-        'learned_shared': 'Learned Shared',
     }
 
     # Create 2x2 grid
@@ -1018,9 +1268,24 @@ def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 50
     # Load top-k indices
     try:
         with open(topk_file, 'r') as f:
-            content = f.read().strip()
-            # Parse Python list format
-            top_k_indices = eval(content)
+            lines = f.readlines()
+        
+        # Handle multi-line format: each line is a list, take first element from each
+        if len(lines) > 1:
+            top_k_indices = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    try:
+                        indices_list = eval(line)
+                        if isinstance(indices_list, list) and len(indices_list) > 0:
+                            top_k_indices.append(indices_list[0])
+                    except:
+                        continue
+            top_k_indices = np.array(top_k_indices)
+        else:
+            # Single line format
+            top_k_indices = eval(lines[0].strip())
             top_k_indices = np.array(top_k_indices)
     except Exception as e:
         print(f"Warning: Could not load top_k_indices file: {e}")
@@ -1129,12 +1394,26 @@ def plot_magnitude_distribution(results_dir, budget, seed, output_dir):
     if topk_file and os.path.exists(topk_file):
         try:
             with open(topk_file, 'r') as f:
-                content = f.read().strip()
-                top_k_indices = eval(content)
-                if len(top_k_indices) > 0:
-                    # Get magnitude of the k-th largest element
-                    k = len(top_k_indices)
-                    top_k_threshold = sorted_magnitudes[min(k, len(sorted_magnitudes)-1)]
+                lines = f.readlines()
+            # Handle multi-line format
+            if len(lines) > 1:
+                top_k_indices = []
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        try:
+                            indices_list = eval(line)
+                            if isinstance(indices_list, list) and len(indices_list) > 0:
+                                top_k_indices.append(indices_list[0])
+                        except:
+                            continue
+            else:
+                top_k_indices = eval(lines[0].strip())
+            
+            if len(top_k_indices) > 0:
+                # Get magnitude of the k-th largest element
+                k = len(top_k_indices)
+                top_k_threshold = sorted_magnitudes[min(k, len(sorted_magnitudes)-1)]
         except:
             pass
 
@@ -1336,11 +1615,26 @@ def plot_index_stability_across_seeds(results_dir, budget, seeds, output_dir, k=
 
         try:
             with open(topk_file, 'r') as f:
-                content = f.read().strip()
-                top_k_indices = eval(content)
-                top_k_indices = np.array(top_k_indices[:k])
-                all_topk_indices.append(set(top_k_indices))
-                valid_seeds.append(seed)
+                lines = f.readlines()
+            
+            # Handle multi-line format
+            if len(lines) > 1:
+                top_k_indices = []
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        try:
+                            indices_list = eval(line)
+                            if isinstance(indices_list, list) and len(indices_list) > 0:
+                                top_k_indices.append(indices_list[0])
+                        except:
+                            continue
+            else:
+                top_k_indices = eval(lines[0].strip())
+            
+            top_k_indices = np.array(top_k_indices[:k])
+            all_topk_indices.append(set(top_k_indices))
+            valid_seeds.append(seed)
         except Exception as e:
             print(f"Warning: Could not load top_k_indices for seed {seed}: {e}")
             continue
@@ -1461,6 +1755,12 @@ def main():
     for budget in args.budgets:
         plot_compression_comparison(df, budget, args.output_dir)
 
+    # Generate bound decomposition plots
+    print("\n[3.5/8] Generating bound decomposition plots...")
+    for budget in args.budgets:
+        plot_bound_decomposition(df, budget, args.output_dir)
+        plot_bound_decomposition_stacked(df, budget, args.output_dir)
+
     # Generate allocation comparison grid
     print("\n[4/8] Generating allocation comparison grid...")
     plot_allocation_comparison_grid(df, args.output_dir)
@@ -1515,6 +1815,8 @@ def main():
     print(f"\n  Complexity & Bounds:")
     print(f"    • pareto_frontier_d*.png             - Complexity vs Risk")
     print(f"    • compression_comparison_d*.png      - 3-panel SubLoRA-style")
+    print(f"    • bound_decomposition_d*.png         - Scatter: Bound vs components")
+    print(f"    • bound_decomposition_stacked_d*.png - Stacked bar: FP+Q-loss+Complexity")
     print(f"    • allocation_comparison_grid.png     - 2x2 grid comparing methods")
     print(f"\n  Prediction Quality Analysis:")
     print(f"    • prediction_rank_histogram_d*_seed*.png - Prediction rank distributions (0=top-1)")
