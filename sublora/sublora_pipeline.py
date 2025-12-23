@@ -722,16 +722,16 @@ class SubLoRA():
         
         print("EVALUATING THE MODEL BEFORE QUANTIZATION")
 
-        losses = self.estimate_loss()
-        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-    
+        fp_losses = self.estimate_loss()
+        print(f"step {self.iter_num}: train loss {fp_losses['train']:.4f}, val loss {fp_losses['val']:.4f}")
+
         self.model, prefix_message_len = quantize_model(self.model, self.train_data, self.block_size, self.intrinsic_dim,
                                                         self.device_type, self.device, self.ddp, self.perturb_word_order_window_size,
                                                         eval_batch_size, max_quant_iters, use_kmeans, levels, quant_lr)
-    
+
         print("EVALUATING THE MODEL AFTER QUANTIZATION")
-        losses = self.estimate_loss()
-        print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        quant_losses = self.estimate_loss()
+        print(f"step {self.iter_num}: train loss {quant_losses['train']:.4f}, val loss {quant_losses['val']:.4f}")
 
         ################ Saving everything for the bound computation ###################
         raw_model = self.model.module if self.ddp else self.model # unwrap DDP container if needed
@@ -863,11 +863,50 @@ class SubLoRA():
                         best_bpd_bound = bounds_dict[f"bound_{k}"]
                                 
         bounds_dict["best_bpd_bound"] = best_bpd_bound
-        
+
         print("\n".join("{}\t{}".format(k, v) for k, v in bounds_dict.items()))
 
         if self.wandb_log:
             wandb.log(bounds_dict)
-            
+
         with open(os.path.join(best_checkpoint_path, f'bounds_levels{levels}_iters{max_quant_iters}.yml'), 'w') as f:
                                 yaml.safe_dump(bounds_dict, f, indent=2)
+
+        # Save bound decomposition for visualization
+        # Compute complexity term: total_bound - train_error
+        # Using the best BPD bound and corresponding training error
+        for k in metrics_dict.keys():
+            if "bpd_alpha" in k:
+                alpha = float(k.replace("bpd_alpha_", ""))
+                delta = np.log2(1 + (1 - alpha) * vocab_size / alpha)
+                train_error = metrics_dict[k]
+                bound_for_k = bounds_dict[f"bound_{k}"]
+
+                if abs(bound_for_k - best_bpd_bound) < 1e-6:
+                    # This is the best bound - compute complexity term
+                    complexity_term = best_bpd_bound - train_error
+
+                    # Import save function from eval_bounds
+                    try:
+                        import sys
+                        import os
+                        experiments_dir = os.path.dirname(os.path.abspath(__file__))
+                        experiments_dir = os.path.join(os.path.dirname(experiments_dir), 'experiments')
+                        sys.path.insert(0, experiments_dir)
+                        from eval_bounds import save_bound_decomposition
+
+                        save_bound_decomposition(
+                            yaml_config=self.yaml_config,
+                            fp_loss_train=fp_losses['train'],
+                            fp_loss_val=fp_losses['val'],
+                            quant_loss_train=quant_losses['train'],
+                            quant_loss_val=quant_losses['val'],
+                            best_bound=best_bpd_bound,
+                            complexity_term=complexity_term,
+                            prefix_message_len=prefix_message_len,
+                            output_dir=best_checkpoint_path
+                        )
+                    except Exception as e:
+                        print(f"Warning: Could not save bound decomposition: {e}")
+
+                    break
