@@ -519,7 +519,7 @@ def plot_pareto_frontier(df, budget, output_dir):
     ax.grid(True, alpha=0.3)
 
     # Save
-    output_path = Path(output_dir) / f'pareto_frontier_d{budget}.png'
+    output_path = Path(output_dir) / 'pareto_frontier.png'
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -587,7 +587,7 @@ def plot_learned_gating_heatmap(results_dir, budgets, seeds, output_dir):
                               ha="center", va="center", color="black", fontsize=9)
 
         # Save
-        output_path = Path(output_dir) / f'learned_gating_heatmap_d{budget}.png'
+        output_path = Path(output_dir) / 'learned_gating_heatmap.png'
         plt.tight_layout()
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
@@ -665,50 +665,149 @@ def plot_learned_gating_trend(results_dir, budgets, seeds, output_dir):
     print(f"Saved learned gating trend: {output_path}")
 
 
-def plot_gating_time_series(results_dir, output_dir):
+def plot_gating_time_series(results_dir, budgets, seeds, budget_dirs):
     """
     Search for `gating_trace.csv` files under `results_dir` and plot per-layer
     gamma time series (one subplot per transformer layer).
+    Organizes outputs by budget into budget_dirs.
+    Creates averaged plots across seeds with variance representation.
+
+    Args:
+        results_dir: Directory with experimental results
+        budgets: List of intrinsic dimensions to process
+        seeds: List of random seeds to process
+        budget_dirs: Dict mapping budget -> output directory path
     """
     results_dir = Path(results_dir)
-    for exp_dir in results_dir.iterdir():
-        if not exp_dir.is_dir():
-            continue
-        # Find any gating_trace.csv under this experiment directory
-        gating_files = list(exp_dir.rglob('gating_trace.csv'))
-        if not gating_files:
-            continue
-        for gf in gating_files:
-            try:
-                df = pd.read_csv(gf)
-            except Exception as e:
-                print(f"  Warning: could not read {gf}: {e}")
-                continue
 
-            # Identify gamma columns (exclude iter and gating_scale)
-            gamma_cols = [c for c in df.columns if c.startswith('gamma_layer_') or c == 'gamma_misc']
-            if not gamma_cols:
-                continue
+    for budget in budgets:
+        # Collect data from all seeds for this budget
+        seed_data = {}
+        gamma_cols = None
 
+        for seed in seeds:
+            # Look for learned gating experiments for this budget/seed
+            possible_names = [
+                f'sublora-d{budget}-learned-seed{seed}',
+                f'd{budget}_learned_seed{seed}',
+                f'sublora-dim{budget}-learned-seed{seed}',
+            ]
+
+            for exp_name in possible_names:
+                exp_dir = results_dir / exp_name
+                if not exp_dir.is_dir():
+                    continue
+
+                # Find any gating_trace.csv under this experiment directory
+                gating_files = list(exp_dir.rglob('gating_trace.csv'))
+                if not gating_files:
+                    continue
+
+                for gf in gating_files:
+                    try:
+                        df = pd.read_csv(gf)
+
+                        # Identify gamma columns (exclude iter and gating_scale)
+                        if gamma_cols is None:
+                            gamma_cols = [c for c in df.columns if c.startswith('gamma_layer_') or c == 'gamma_misc']
+
+                        if not gamma_cols:
+                            continue
+
+                        # Store dataframe indexed by iteration
+                        df_indexed = df.set_index('iter')
+                        seed_data[seed] = df_indexed
+                        print(f"Loaded gating trace for d={budget}, seed={seed} ({len(df)} iterations)")
+                        break  # Found data for this seed, move to next
+
+                    except Exception as e:
+                        print(f"  Warning: could not read {gf}: {e}")
+                        continue
+
+                if seed in seed_data:
+                    break  # Found data for this seed, move to next
+
+        # Skip if no data found
+        if not seed_data or gamma_cols is None:
+            print(f"Warning: No gating trace data found for d={budget}")
+            continue
+
+        # Create individual seed plots
+        for seed, df_indexed in seed_data.items():
             num_layers = len(gamma_cols)
-            # Create subplots vertically stacked
             fig, axes = plt.subplots(num_layers, 1, figsize=(10, 2.2 * num_layers), sharex=True)
             if num_layers == 1:
                 axes = [axes]
 
             for i, col in enumerate(gamma_cols):
-                axes[i].plot(df['iter'], df[col], linewidth=1.5)
+                axes[i].plot(df_indexed.index, df_indexed[col], linewidth=1.5)
                 axes[i].set_ylabel(col)
                 axes[i].set_ylim(0, 1)
                 axes[i].grid(True, alpha=0.3)
 
             axes[-1].set_xlabel('Iteration')
-            fig.suptitle(f'Gating γ over time: {exp_dir.name} ({gf.parent.name})')
-            out_path = Path(output_dir) / f'gating_trace_{exp_dir.name}_{gf.parent.name}.png'
+            fig.suptitle(f'Gating γ over time: d={budget}, seed={seed}')
+
+            out_path = Path(budget_dirs[budget]) / f'gating_trace_seed{seed}.png'
             plt.tight_layout()
             plt.savefig(out_path, dpi=200, bbox_inches='tight')
             plt.close()
             print(f"Saved gating trace plot: {out_path}")
+
+        # Create averaged plot across seeds
+        if len(seed_data) >= 2:
+            # Find common iterations across all seeds
+            common_iters = set(seed_data[seeds[0]].index)
+            for seed in seeds[1:]:
+                if seed in seed_data:
+                    common_iters &= set(seed_data[seed].index)
+
+            if not common_iters:
+                print(f"Warning: No common iterations found across seeds for d={budget}")
+                continue
+
+            common_iters = sorted(list(common_iters))
+
+            # Compute mean and std for each gamma column
+            num_layers = len(gamma_cols)
+            fig, axes = plt.subplots(num_layers, 1, figsize=(10, 2.2 * num_layers), sharex=True)
+            if num_layers == 1:
+                axes = [axes]
+
+            for i, col in enumerate(gamma_cols):
+                # Extract values for this column from all seeds
+                values_by_seed = []
+                for seed in seeds:
+                    if seed in seed_data:
+                        values_by_seed.append(seed_data[seed].loc[common_iters, col].values)
+
+                # Stack and compute statistics
+                values_array = np.array(values_by_seed)  # shape: (num_seeds, num_iters)
+                mean_values = np.mean(values_array, axis=0)
+                std_values = np.std(values_array, axis=0)
+
+                # Plot mean line with shaded standard deviation region
+                axes[i].plot(common_iters, mean_values, linewidth=2, color='C0', label='Mean')
+                axes[i].fill_between(common_iters,
+                                     mean_values - std_values,
+                                     mean_values + std_values,
+                                     alpha=0.3, color='C0', label='±1 std')
+                axes[i].set_ylabel(col)
+                axes[i].set_ylim(0, 1)
+                axes[i].grid(True, alpha=0.3)
+                if i == 0:
+                    axes[i].legend(loc='upper right', fontsize=9)
+
+            axes[-1].set_xlabel('Iteration')
+            fig.suptitle(f'Gating γ over time (averaged across seeds): d={budget}')
+
+            out_path = Path(budget_dirs[budget]) / f'gating_trace_average.png'
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"Saved averaged gating trace plot: {out_path}")
+        else:
+            print(f"Warning: Need at least 2 seeds to compute average for d={budget}, found {len(seed_data)}")
 
 
 def plot_compression_comparison(df, budget, output_dir):
@@ -807,7 +906,7 @@ def plot_compression_comparison(df, budget, output_dir):
     ax3.legend(loc='best', fontsize=8, framealpha=0.9, ncol=2)
 
     plt.tight_layout()
-    output_path = Path(output_dir) / f'compression_comparison_d{budget}.png'
+    output_path = Path(output_dir) / 'compression_comparison.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -1231,10 +1330,11 @@ def generate_summary_table(df, output_dir):
     return final_table
 
 
-def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 500, 1000]):
+def plot_topk_histogram(results_dir, budget, seeds, output_dir, k_values=[100, 500, 1000]):
     """
     Histogram showing distribution of prediction ranks (top-k indices).
     Shows where the correct token ranked in the model's predictions (0=top prediction).
+    Combines multiple seeds into a single comparison plot.
 
     NOTE: This measures prediction quality, NOT subspace dimension utilization.
     Lower ranks = better predictions (rank 0 = perfect top-1 prediction).
@@ -1242,53 +1342,53 @@ def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 50
     Args:
         results_dir: Directory with experimental results
         budget: Intrinsic dimension (e.g., 10000, 20000)
-        seed: Random seed
+        seeds: List of random seeds to compare
         output_dir: Directory to save plots
         k_values: List of k values to plot (e.g., [100, 500, 1000])
     """
-    # Find experiment directory
-    possible_names = [
-        f'sublora-d{budget}-learned-seed{seed}',
-        f'd{budget}_learned_seed{seed}',
-        f'sublora-dim{budget}-learned-seed{seed}',
-    ]
+    colors = ['steelblue', 'darkorange', 'green', 'red']
 
-    topk_file = None
-    for name in possible_names:
-        exp_dir = Path(results_dir) / name
-        if exp_dir.exists():
-            topk_file = find_topk_indices_file(exp_dir)
-            if topk_file:
-                break
+    # Collect data for all seeds
+    seed_data = {}
+    for seed in seeds:
+        # Find experiment directory
+        possible_names = [
+            f'sublora-d{budget}-learned-seed{seed}',
+            f'd{budget}_learned_seed{seed}',
+            f'sublora-dim{budget}-learned-seed{seed}',
+        ]
 
-    if not topk_file or not os.path.exists(topk_file):
-        print(f"Warning: top_k_indices file not found for d={budget}, seed={seed}")
-        return
+        topk_file = None
+        for name in possible_names:
+            exp_dir = Path(results_dir) / name
+            if exp_dir.exists():
+                topk_file = find_topk_indices_file(exp_dir)
+                if topk_file:
+                    break
 
-    # Load top-k indices
-    try:
-        with open(topk_file, 'r') as f:
-            lines = f.readlines()
-        
-        # Handle multi-line format: each line is a list, take first element from each
-        if len(lines) > 1:
-            top_k_indices = []
-            for line in lines:
-                line = line.strip()
-                if line:
-                    try:
-                        indices_list = eval(line)
-                        if isinstance(indices_list, list) and len(indices_list) > 0:
-                            top_k_indices.append(indices_list[0])
-                    except:
-                        continue
-            top_k_indices = np.array(top_k_indices)
-        else:
-            # Single line format
-            top_k_indices = eval(lines[0].strip())
-            top_k_indices = np.array(top_k_indices)
-    except Exception as e:
-        print(f"Warning: Could not load top_k_indices file: {e}")
+        if not topk_file or not os.path.exists(topk_file):
+            print(f"Warning: top_k_indices file not found for d={budget}, seed={seed}")
+            continue
+
+        # Load top-k indices
+        try:
+            import ast
+            with open(topk_file, 'r') as f:
+                all_indices = []
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        # Parse each line as a separate Python list
+                        indices = ast.literal_eval(line)
+                        all_indices.extend(indices)
+                top_k_indices = np.array(all_indices)
+                seed_data[seed] = top_k_indices
+        except Exception as e:
+            print(f"Warning: Could not load top_k_indices file for seed={seed}: {e}")
+            continue
+
+    if not seed_data:
+        print(f"Warning: No data found for d={budget}")
         return
 
     # Create figure with subplots for different k values
@@ -1297,18 +1397,24 @@ def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 50
         axes = [axes]
 
     for ax, k in zip(axes, k_values):
-        if k > len(top_k_indices):
-            k = len(top_k_indices)
+        # Plot histogram for each seed
+        for i, (seed, top_k_indices) in enumerate(seed_data.items()):
+            if k > len(top_k_indices):
+                k_use = len(top_k_indices)
+            else:
+                k_use = k
 
-        indices_subset = top_k_indices[:k]
+            indices_subset = top_k_indices[:k_use]
 
-        # Create histogram
-        num_bins = min(50, budget // 200)  # Adaptive number of bins
-        ax.hist(indices_subset, bins=num_bins, edgecolor='black', alpha=0.7, color='steelblue')
+            # Create histogram
+            num_bins = min(50, budget // 200)  # Adaptive number of bins
+            color = colors[i % len(colors)]
+            ax.hist(indices_subset, bins=num_bins, alpha=0.5, color=color,
+                   label=f'Seed {seed}', edgecolor='black', linewidth=0.5)
 
-        # Add vertical line at mean
-        mean_idx = np.mean(indices_subset)
-        ax.axvline(mean_idx, color='red', linestyle='--', linewidth=2, label=f'Mean Rank: {mean_idx:.0f}')
+            # Add vertical line at mean
+            mean_idx = np.mean(indices_subset)
+            ax.axvline(mean_idx, color=color, linestyle='--', linewidth=1.5, alpha=0.8)
 
         ax.set_xlabel('Prediction Rank (0=top prediction)', fontsize=12, fontweight='bold')
         ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
@@ -1316,266 +1422,277 @@ def plot_topk_histogram(results_dir, budget, seed, output_dir, k_values=[100, 50
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f'Prediction Rank Distribution (d={budget}, seed={seed})', fontsize=15, fontweight='bold')
+    seed_str = ', '.join([str(s) for s in seeds])
+    fig.suptitle(f'Prediction Rank Distribution (d={budget}, seeds={seed_str})', fontsize=15, fontweight='bold')
     plt.tight_layout()
 
-    output_path = Path(output_dir) / f'prediction_rank_histogram_d{budget}_seed{seed}.png'
+    output_path = Path(output_dir) / 'prediction_rank_histogram.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
     print(f"Saved prediction rank histogram: {output_path}")
 
 
-def plot_magnitude_distribution(results_dir, budget, seed, output_dir):
+def plot_magnitude_distribution(results_dir, budget, seeds, output_dir):
     """
     Plot sorted magnitudes of subspace_params to show effective dimensionality.
+    Combines multiple seeds into a single comparison plot.
 
     Args:
         results_dir: Directory with experimental results
         budget: Intrinsic dimension
-        seed: Random seed
+        seeds: List of random seeds to compare
         output_dir: Directory to save plots
     """
-    # Find experiment directory and checkpoint
-    possible_names = [
-        f'sublora-d{budget}-learned-seed{seed}',
-        f'd{budget}_learned_seed{seed}',
-        f'sublora-dim{budget}-learned-seed{seed}',
-    ]
+    colors = ['steelblue', 'darkorange', 'green', 'red']
 
-    checkpoint_path = None
-    topk_file = None
-    for name in possible_names:
-        exp_dir = Path(results_dir) / name
-        if exp_dir.exists():
-            checkpoint_path = find_best_checkpoint(exp_dir)
-            topk_file = find_topk_indices_file(exp_dir)
-            if checkpoint_path and topk_file:
-                break
+    # Collect data for all seeds
+    seed_data = {}
+    for seed in seeds:
+        # Find experiment directory and checkpoint
+        possible_names = [
+            f'sublora-d{budget}-learned-seed{seed}',
+            f'd{budget}_learned_seed{seed}',
+            f'sublora-dim{budget}-learned-seed{seed}',
+        ]
 
-    if not checkpoint_path or not os.path.exists(checkpoint_path):
-        print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
-        return
+        checkpoint_path = None
+        for name in possible_names:
+            exp_dir = Path(results_dir) / name
+            if exp_dir.exists():
+                checkpoint_path = find_best_checkpoint(exp_dir)
+                if checkpoint_path:
+                    break
 
-    # Load checkpoint
-    try:
-        checkpoint = load_checkpoint(checkpoint_path)
-        # Extract subspace_params
-        if 'subspace_params' in checkpoint:
-            subspace_params = checkpoint['subspace_params']
-        elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
-            subspace_params = checkpoint['raw_model']['subspace_params']
-        elif 'model' in checkpoint:
-            # Try to find subspace_params in model state dict
-            state_dict = checkpoint['model']
-            subspace_params = state_dict.get('subspace_params', None)
-        else:
-            print(f"Warning: Could not find subspace_params in checkpoint")
-            return
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
+            continue
 
-        if subspace_params is None:
-            print(f"Warning: subspace_params is None")
-            return
-
-        # Convert to numpy
-        if isinstance(subspace_params, torch.Tensor):
-            subspace_params = subspace_params.cpu().numpy()
-
-    except Exception as e:
-        print(f"Warning: Could not load checkpoint: {e}")
-        return
-
-    # Compute magnitudes and sort
-    magnitudes = np.abs(subspace_params)
-    sorted_magnitudes = np.sort(magnitudes)[::-1]  # Descending order
-
-    # Load top-k indices for reference
-    top_k_threshold = None
-    if topk_file and os.path.exists(topk_file):
+        # Load checkpoint
         try:
-            with open(topk_file, 'r') as f:
-                lines = f.readlines()
-            # Handle multi-line format
-            if len(lines) > 1:
-                top_k_indices = []
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        try:
-                            indices_list = eval(line)
-                            if isinstance(indices_list, list) and len(indices_list) > 0:
-                                top_k_indices.append(indices_list[0])
-                        except:
-                            continue
+            checkpoint = load_checkpoint(checkpoint_path)
+            if 'subspace_params' in checkpoint:
+                subspace_params = checkpoint['subspace_params']
+            elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
+                subspace_params = checkpoint['raw_model']['subspace_params']
+            elif 'model' in checkpoint:
+                state_dict = checkpoint['model']
+                subspace_params = state_dict.get('subspace_params', None)
             else:
-                top_k_indices = eval(lines[0].strip())
-            
-            if len(top_k_indices) > 0:
-                # Get magnitude of the k-th largest element
-                k = len(top_k_indices)
-                top_k_threshold = sorted_magnitudes[min(k, len(sorted_magnitudes)-1)]
-        except:
-            pass
+                print(f"Warning: Could not find subspace_params in checkpoint for seed={seed}")
+                continue
 
-    # Create plot
+            if subspace_params is None:
+                print(f"Warning: subspace_params is None for seed={seed}")
+                continue
+
+            # Convert to numpy
+            if isinstance(subspace_params, torch.Tensor):
+                subspace_params = subspace_params.cpu().numpy()
+
+            # Compute magnitudes and sort
+            magnitudes = np.abs(subspace_params)
+            sorted_magnitudes = np.sort(magnitudes)[::-1]  # Descending order
+
+            seed_data[seed] = sorted_magnitudes
+
+        except Exception as e:
+            print(f"Warning: Could not load checkpoint for seed={seed}: {e}")
+            continue
+
+    if not seed_data:
+        print(f"Warning: No data found for d={budget}")
+        return
+
+    # Create combined plot
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Plot 1: Full sorted magnitudes (log scale)
-    indices = np.arange(1, len(sorted_magnitudes) + 1)
-    ax1.plot(indices, sorted_magnitudes, linewidth=1.5, color='steelblue')
+    # Plot 1: Sorted magnitudes (log scale) - all seeds
+    for i, (seed, sorted_magnitudes) in enumerate(seed_data.items()):
+        indices = np.arange(1, len(sorted_magnitudes) + 1)
+        color = colors[i % len(colors)]
+        ax1.plot(indices, sorted_magnitudes, linewidth=1.5, color=color,
+                label=f'Seed {seed}', alpha=0.8)
+
     ax1.set_xlabel('Rank (sorted by magnitude)', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Magnitude |θ_i|', fontsize=12, fontweight='bold')
     ax1.set_title('Sorted Subspace Parameter Magnitudes', fontsize=13, fontweight='bold')
     ax1.set_yscale('log')
     ax1.grid(True, alpha=0.3, which='both')
+    ax1.legend(fontsize=10)
 
-    if top_k_threshold is not None:
-        ax1.axhline(top_k_threshold, color='red', linestyle='--', linewidth=2,
-                    label=f'Top-{k} threshold')
-        ax1.legend(fontsize=10)
+    # Plot 2: Cumulative percentage - all seeds
+    for i, (seed, sorted_magnitudes) in enumerate(seed_data.items()):
+        indices = np.arange(1, len(sorted_magnitudes) + 1)
+        cumsum_magnitudes = np.cumsum(sorted_magnitudes)
+        total_magnitude = cumsum_magnitudes[-1]
+        cumsum_percent = 100 * cumsum_magnitudes / total_magnitude
+        color = colors[i % len(colors)]
 
-    # Plot 2: Cumulative percentage of total magnitude
-    cumsum_magnitudes = np.cumsum(sorted_magnitudes)
-    total_magnitude = cumsum_magnitudes[-1]
-    cumsum_percent = 100 * cumsum_magnitudes / total_magnitude
+        ax2.plot(indices, cumsum_percent, linewidth=2, color=color,
+                label=f'Seed {seed}', alpha=0.8)
 
-    ax2.plot(indices, cumsum_percent, linewidth=2, color='darkgreen')
     ax2.set_xlabel('Rank (sorted by magnitude)', fontsize=12, fontweight='bold')
     ax2.set_ylabel('Cumulative % of Total Magnitude', fontsize=12, fontweight='bold')
     ax2.set_title('Effective Dimensionality', fontsize=13, fontweight='bold')
     ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=10)
+
+    # Add reference lines (use first seed's data)
+    first_seed_data = list(seed_data.values())[0]
+    cumsum_magnitudes = np.cumsum(first_seed_data)
+    total_magnitude = cumsum_magnitudes[-1]
+    cumsum_percent = 100 * cumsum_magnitudes / total_magnitude
 
     # Add reference lines
     for pct in [50, 90, 95, 99]:
         idx_pct = np.searchsorted(cumsum_percent, pct)
-        ax2.axhline(pct, color='gray', linestyle=':', alpha=0.5)
-        ax2.axvline(idx_pct, color='gray', linestyle=':', alpha=0.5)
-        ax2.text(idx_pct, pct + 2, f'{idx_pct} dims', fontsize=9, ha='center')
+        ax2.axhline(pct, color='gray', linestyle=':', alpha=0.3)
+        ax2.text(len(first_seed_data) * 0.95, pct + 1, f'{pct}%',
+                fontsize=8, ha='right', alpha=0.7)
 
-    fig.suptitle(f'Subspace Parameter Magnitude Analysis (d={budget}, seed={seed})',
+    seed_str = ', '.join([str(s) for s in seeds])
+    fig.suptitle(f'Subspace Parameter Magnitude Analysis (d={budget}, seeds={seed_str})',
                  fontsize=15, fontweight='bold')
     plt.tight_layout()
 
-    output_path = Path(output_dir) / f'magnitude_distribution_d{budget}_seed{seed}.png'
+    output_path = Path(output_dir) / 'magnitude_distribution.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
     print(f"Saved magnitude distribution: {output_path}")
 
 
-def plot_sparsity_patterns(results_dir, budget, seed, output_dir, percentile_threshold=95):
+def plot_sparsity_patterns(results_dir, budget, seeds, output_dir, percentile_threshold=95):
     """
     Binary heatmap showing which indices are 'active' (above threshold).
-    Reveals structured sparsity patterns.
+    Combines multiple seeds into single grid layout (one row per seed).
 
     Args:
         results_dir: Directory with experimental results
         budget: Intrinsic dimension
-        seed: Random seed
+        seeds: List of random seeds
         output_dir: Directory to save plots
         percentile_threshold: Percentile threshold for active indices (default: 95)
     """
-    # Find checkpoint
-    possible_names = [
-        f'sublora-d{budget}-learned-seed{seed}',
-        f'd{budget}_learned_seed{seed}',
-        f'sublora-dim{budget}-learned-seed{seed}',
-    ]
+    # Collect data from all seeds
+    seed_data = []
 
-    checkpoint_path = None
-    for name in possible_names:
-        exp_dir = Path(results_dir) / name
-        if exp_dir.exists():
-            checkpoint_path = find_best_checkpoint(exp_dir)
-            if checkpoint_path:
-                break
+    for seed in seeds:
+        # Find checkpoint
+        possible_names = [
+            f'sublora-d{budget}-learned-seed{seed}',
+            f'd{budget}_learned_seed{seed}',
+            f'sublora-dim{budget}-learned-seed{seed}',
+        ]
 
-    if not checkpoint_path or not os.path.exists(checkpoint_path):
-        print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
+        checkpoint_path = None
+        for name in possible_names:
+            exp_dir = Path(results_dir) / name
+            if exp_dir.exists():
+                checkpoint_path = find_best_checkpoint(exp_dir)
+                if checkpoint_path:
+                    break
+
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint not found for d={budget}, seed={seed}")
+            continue
+
+        # Load subspace_params
+        try:
+            checkpoint = load_checkpoint(checkpoint_path)
+            if 'subspace_params' in checkpoint:
+                subspace_params = checkpoint['subspace_params']
+            elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
+                subspace_params = checkpoint['raw_model']['subspace_params']
+            elif 'model' in checkpoint:
+                state_dict = checkpoint['model']
+                subspace_params = state_dict.get('subspace_params', None)
+            else:
+                print(f"Warning: Could not find subspace_params for seed={seed}")
+                continue
+
+            if isinstance(subspace_params, torch.Tensor):
+                subspace_params = subspace_params.cpu().numpy()
+
+            seed_data.append((seed, subspace_params))
+        except Exception as e:
+            print(f"Warning: Could not load checkpoint for seed={seed}: {e}")
+            continue
+
+    if not seed_data:
+        print(f"Warning: No valid data found for d={budget}")
         return
 
-    # Load subspace_params
-    try:
-        checkpoint = load_checkpoint(checkpoint_path)
-        if 'subspace_params' in checkpoint:
-            subspace_params = checkpoint['subspace_params']
-        elif 'raw_model' in checkpoint and 'subspace_params' in checkpoint['raw_model']:
-            subspace_params = checkpoint['raw_model']['subspace_params']
-        elif 'model' in checkpoint:
-            state_dict = checkpoint['model']
-            subspace_params = state_dict.get('subspace_params', None)
+    # Create grid layout: n_seeds rows × 2 columns
+    n_seeds = len(seed_data)
+    fig, axes = plt.subplots(n_seeds, 2, figsize=(14, 6 * n_seeds))
+
+    # Handle case of single seed
+    if n_seeds == 1:
+        axes = axes.reshape(1, -1)
+
+    for idx, (seed, subspace_params) in enumerate(seed_data):
+        # Compute threshold
+        magnitudes = np.abs(subspace_params)
+        threshold = np.percentile(magnitudes, percentile_threshold)
+
+        # Create binary pattern
+        active_indices = magnitudes > threshold
+
+        # Reshape into 2D for visualization (sqrt grid)
+        grid_size = int(np.ceil(np.sqrt(len(subspace_params))))
+        padded_length = grid_size ** 2
+
+        # Pad with zeros if needed
+        if len(active_indices) < padded_length:
+            active_indices_padded = np.zeros(padded_length, dtype=bool)
+            active_indices_padded[:len(active_indices)] = active_indices
         else:
-            print(f"Warning: Could not find subspace_params")
-            return
+            active_indices_padded = active_indices[:padded_length]
 
-        if isinstance(subspace_params, torch.Tensor):
-            subspace_params = subspace_params.cpu().numpy()
-    except Exception as e:
-        print(f"Warning: Could not load checkpoint: {e}")
-        return
+        pattern_2d = active_indices_padded.reshape(grid_size, grid_size)
 
-    # Compute threshold
-    magnitudes = np.abs(subspace_params)
-    threshold = np.percentile(magnitudes, percentile_threshold)
+        # Plot 1: Binary sparsity pattern
+        ax1 = axes[idx, 0]
+        im1 = ax1.imshow(pattern_2d, cmap='RdYlGn', aspect='auto', interpolation='nearest')
 
-    # Create binary pattern
-    active_indices = magnitudes > threshold
+        sparsity = 100 * np.sum(active_indices) / len(active_indices)
+        ax1.set_title(f'Sparsity Pattern (seed={seed})\n'
+                     f'>{percentile_threshold}th percentile: {np.sum(active_indices)}/{len(active_indices)} ({sparsity:.1f}%)',
+                     fontsize=11, fontweight='bold')
+        ax1.set_xlabel('Index (reshaped)', fontsize=10)
+        ax1.set_ylabel('Index (reshaped)', fontsize=10)
 
-    # Reshape into 2D for visualization (sqrt grid)
-    grid_size = int(np.ceil(np.sqrt(len(subspace_params))))
-    padded_length = grid_size ** 2
+        # Add colorbar
+        cbar1 = plt.colorbar(im1, ax=ax1)
+        cbar1.set_label('Active', rotation=270, labelpad=15, fontsize=9)
 
-    # Pad with zeros if needed
-    if len(active_indices) < padded_length:
-        active_indices_padded = np.zeros(padded_length, dtype=bool)
-        active_indices_padded[:len(active_indices)] = active_indices
-    else:
-        active_indices_padded = active_indices[:padded_length]
+        # Plot 2: Magnitude heatmap (log scale)
+        ax2 = axes[idx, 1]
+        magnitudes_2d = np.zeros(padded_length)
+        magnitudes_2d[:len(magnitudes)] = magnitudes
+        if len(magnitudes) < padded_length:
+            magnitudes_2d[len(magnitudes):] = np.nan
+        magnitudes_2d = magnitudes_2d.reshape(grid_size, grid_size)
 
-    pattern_2d = active_indices_padded.reshape(grid_size, grid_size)
+        im2 = ax2.imshow(np.log10(magnitudes_2d + 1e-10), cmap='viridis', aspect='auto', interpolation='nearest')
+        ax2.set_title(f'Log Magnitude Heatmap (seed={seed})', fontsize=11, fontweight='bold')
+        ax2.set_xlabel('Index (reshaped)', fontsize=10)
+        ax2.set_ylabel('Index (reshaped)', fontsize=10)
 
-    # Create plot
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        cbar2 = plt.colorbar(im2, ax=ax2)
+        cbar2.set_label('log₁₀(|θ_i|)', rotation=270, labelpad=15, fontsize=9)
 
-    # Plot 1: Binary sparsity pattern
-    im1 = ax1.imshow(pattern_2d, cmap='RdYlGn', aspect='auto', interpolation='nearest')
-    ax1.set_title(f'Sparsity Pattern (>{percentile_threshold}th percentile)',
-                  fontsize=13, fontweight='bold')
-    ax1.set_xlabel('Index (reshaped)', fontsize=11)
-    ax1.set_ylabel('Index (reshaped)', fontsize=11)
-
-    # Add colorbar
-    cbar1 = plt.colorbar(im1, ax=ax1)
-    cbar1.set_label('Active (1) / Inactive (0)', rotation=270, labelpad=20)
-
-    # Plot 2: Magnitude heatmap (log scale)
-    magnitudes_2d = np.zeros(padded_length)
-    magnitudes_2d[:len(magnitudes)] = magnitudes
-    if len(magnitudes) < padded_length:
-        magnitudes_2d[len(magnitudes):] = np.nan
-    magnitudes_2d = magnitudes_2d.reshape(grid_size, grid_size)
-
-    im2 = ax2.imshow(np.log10(magnitudes_2d + 1e-10), cmap='viridis', aspect='auto', interpolation='nearest')
-    ax2.set_title('Log Magnitude Heatmap', fontsize=13, fontweight='bold')
-    ax2.set_xlabel('Index (reshaped)', fontsize=11)
-    ax2.set_ylabel('Index (reshaped)', fontsize=11)
-
-    cbar2 = plt.colorbar(im2, ax=ax2)
-    cbar2.set_label('log₁₀(|θ_i|)', rotation=270, labelpad=20)
-
-    # Add statistics
-    sparsity = 100 * np.sum(active_indices) / len(active_indices)
-    fig.suptitle(f'Sparsity Analysis (d={budget}, seed={seed})\n'
-                 f'Active indices: {np.sum(active_indices)} / {len(active_indices)} ({sparsity:.1f}%)',
-                 fontsize=14, fontweight='bold')
-
+    # Overall title
+    fig.suptitle(f'Sparsity Analysis (d={budget})', fontsize=14, fontweight='bold')
     plt.tight_layout()
 
-    output_path = Path(output_dir) / f'sparsity_pattern_d{budget}_seed{seed}.png'
+    output_path = Path(output_dir) / 'sparsity.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"Saved sparsity pattern: {output_path}")
+    print(f"Saved combined sparsity patterns: {output_path}")
 
 
 def plot_index_stability_across_seeds(results_dir, budget, seeds, output_dir, k=1000):
@@ -1706,7 +1823,7 @@ def plot_index_stability_across_seeds(results_dir, budget, seeds, output_dir, k=
     fig.suptitle(f'Top-{k} Index Stability Analysis (d={budget})', fontsize=15, fontweight='bold')
     plt.tight_layout()
 
-    output_path = Path(output_dir) / f'index_stability_d{budget}.png'
+    output_path = Path(output_dir) / 'index_stability.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -1726,12 +1843,22 @@ def main():
 
     args = parser.parse_args()
 
-    # Create output directory
+    # Create output directory and budget-specific subdirectories
     os.makedirs(args.output_dir, exist_ok=True)
+    budget_dirs = {}
+    for budget in args.budgets:
+        budget_dir = os.path.join(args.output_dir, f'd{budget}')
+        os.makedirs(budget_dir, exist_ok=True)
+        budget_dirs[budget] = budget_dir
 
     print("=" * 80)
     print("ANALYZING ADAPTIVE SUBSPACE ALLOCATION EXPERIMENTS")
     print("=" * 80)
+    print(f"\nOutput structure:")
+    print(f"  {args.output_dir}/")
+    for budget in args.budgets:
+        print(f"    ├── d{budget}/  (budget-specific visualizations)")
+    print(f"    └── (cross-budget comparisons)")
 
     # Extract metrics
     print("\n[1/8] Extracting bounds metrics from experiments...")
@@ -1745,57 +1872,55 @@ def main():
     print(f"Configurations: {df['mode'].nunique()}")
     print(f"Budgets: {sorted(df['budget'].unique())}")
 
-    # Generate Pareto frontiers
+    # Generate Pareto frontiers (budget-specific)
     print("\n[2/8] Generating Pareto frontier plots...")
     for budget in args.budgets:
-        plot_pareto_frontier(df, budget, args.output_dir)
+        plot_pareto_frontier(df, budget, budget_dirs[budget])
 
-    # Generate compression comparison plots (SubLoRA-style)
+    # Generate compression comparison plots (budget-specific)
     print("\n[3/8] Generating compression comparison plots...")
     for budget in args.budgets:
-        plot_compression_comparison(df, budget, args.output_dir)
+        plot_compression_comparison(df, budget, budget_dirs[budget])
 
-    # Generate bound decomposition plots
+    # Generate bound decomposition plots (budget-specific)
     print("\n[3.5/8] Generating bound decomposition plots...")
     for budget in args.budgets:
-        plot_bound_decomposition(df, budget, args.output_dir)
-        plot_bound_decomposition_stacked(df, budget, args.output_dir)
+        plot_bound_decomposition(df, budget, budget_dirs[budget])
+        plot_bound_decomposition_stacked(df, budget, budget_dirs[budget])
 
-    # Generate allocation comparison grid
+    # Generate allocation comparison grid (cross-budget comparison - stays in root)
     print("\n[4/8] Generating allocation comparison grid...")
     plot_allocation_comparison_grid(df, args.output_dir)
 
-    # Generate learned gating heatmaps
+    # Generate learned gating heatmaps (budget-specific)
     print("\n[5/8] Generating learned gating heatmaps...")
-    plot_learned_gating_heatmap(args.results_dir, args.budgets, args.seeds, args.output_dir)
+    for budget in args.budgets:
+        plot_learned_gating_heatmap(args.results_dir, [budget], args.seeds, budget_dirs[budget])
 
-    # Generate learned gating trends
+    # Generate learned gating trends (cross-budget comparison - stays in root)
     print("\n[6/8] Generating learned gating trend plots...")
     plot_learned_gating_trend(args.results_dir, args.budgets, args.seeds, args.output_dir)
 
-    # Generate gating time-series plots if available
+    # Generate gating time-series plots if available (budget-specific)
     print("\n[6.5/8] Generating gating time-series plots (per-iteration)...")
-    plot_gating_time_series(args.results_dir, args.output_dir)
+    plot_gating_time_series(args.results_dir, args.budgets, args.seeds, budget_dirs)
 
-    # Generate prediction rank visualizations
-    print("\n[7/12] Generating prediction rank histograms...")
+    # Generate prediction rank visualizations (budget-specific, combined seeds)
+    print("\n[7/12] Generating prediction rank histograms (combining seeds)...")
     for budget in args.budgets:
-        for seed in args.seeds:
-            plot_topk_histogram(args.results_dir, budget, seed, args.output_dir, k_values=[100, 500, 1000])
+        plot_topk_histogram(args.results_dir, budget, args.seeds, budget_dirs[budget], k_values=[100, 500, 1000])
 
-    print("\n[8/12] Generating magnitude distribution plots...")
+    print("\n[8/12] Generating magnitude distribution plots (combining seeds)...")
     for budget in args.budgets:
-        for seed in args.seeds:
-            plot_magnitude_distribution(args.results_dir, budget, seed, args.output_dir)
+        plot_magnitude_distribution(args.results_dir, budget, args.seeds, budget_dirs[budget])
 
-    print("\n[9/12] Generating sparsity pattern plots...")
+    print("\n[9/12] Generating sparsity pattern plots (combining seeds)...")
     for budget in args.budgets:
-        for seed in args.seeds:
-            plot_sparsity_patterns(args.results_dir, budget, seed, args.output_dir, percentile_threshold=95)
+        plot_sparsity_patterns(args.results_dir, budget, args.seeds, budget_dirs[budget], percentile_threshold=95)
 
     print("\n[10/12] Generating index stability analysis...")
     for budget in args.budgets:
-        plot_index_stability_across_seeds(args.results_dir, budget, args.seeds, args.output_dir, k=1000)
+        plot_index_stability_across_seeds(args.results_dir, budget, args.seeds, budget_dirs[budget], k=1000)
 
     # Generate summary table
     print("\n[11/12] Generating summary tables...")
@@ -1807,42 +1932,46 @@ def main():
     print("\n" + "=" * 80)
     print(f"ANALYSIS COMPLETE! Outputs saved to: {args.output_dir}")
     print("=" * 80)
-    print("\n📊 Generated Visualizations:")
-    print(f"\n  Gating Analysis:")
-    print(f"    • learned_gating_heatmap_d*.png      - Per-layer γ heatmap")
-    print(f"    • learned_gating_trend.png           - γ trends across layers")
-    print(f"    • gating_trace_*.png                 - Per-iteration γ evolution")
-    print(f"\n  Complexity & Bounds:")
-    print(f"    • pareto_frontier_d*.png             - Complexity vs Risk")
-    print(f"    • compression_comparison_d*.png      - 3-panel SubLoRA-style")
-    print(f"    • bound_decomposition_d*.png         - Scatter: Bound vs components")
-    print(f"    • bound_decomposition_stacked_d*.png - Stacked bar: FP+Q-loss+Complexity")
-    print(f"    • allocation_comparison_grid.png     - 2x2 grid comparing methods")
-    print(f"\n  Prediction Quality Analysis:")
-    print(f"    • prediction_rank_histogram_d*_seed*.png - Prediction rank distributions (0=top-1)")
-    print(f"    • magnitude_distribution_d*_seed*.png    - Sorted magnitudes & effective dim")
-    print(f"    • sparsity_pattern_d*_seed*.png          - Binary sparsity patterns")
-    print(f"    • index_stability_d*.png             - Cross-seed consistency")
-    print(f"\n📋 Generated Tables:")
-    print(f"    • summary_table.csv                  - Complete numerical results")
-    print(f"    • summary_table.tex                  - LaTeX formatted table")
+    print("\n📂 Output Directory Structure:")
+    print(f"  {args.output_dir}/")
+    for budget in args.budgets:
+        print(f"    ├── d{budget}/")
+        print(f"    │   ├── pareto_frontier.png")
+        print(f"    │   ├── compression_comparison.png")
+        print(f"    │   ├── bound_decomposition.png")
+        print(f"    │   ├── bound_decomposition_stacked.png")
+        print(f"    │   ├── learned_gating_heatmap.png")
+        print(f"    │   ├── gating_trace_seed*.png               (per seed, if learned mode)")
+        print(f"    │   ├── gating_trace_average.png             (averaged across seeds)")
+        print(f"    │   ├── prediction_rank_histogram.png        (combined seeds)")
+        print(f"    │   ├── magnitude_distribution.png           (combined seeds)")
+        print(f"    │   ├── sparsity.png                         (combined seeds)")
+        print(f"    │   └── index_stability.png                  (cross-seed)")
+    print(f"    │")
+    print(f"    ├── allocation_comparison_grid.png    (cross-budget)")
+    print(f"    ├── learned_gating_trend.png          (cross-budget)")
+    print(f"    ├── summary_table.csv")
+    print(f"    └── summary_table.tex")
 
-    # Count total files
-    n_budgets = len(args.budgets)
-    n_seeds = len(args.seeds)
-    n_gating_heatmaps = n_budgets
-    n_pareto = n_budgets
-    n_compression = n_budgets
-    n_topk_hist = n_budgets * n_seeds
-    n_magnitude = n_budgets * n_seeds
-    n_sparsity = n_budgets * n_seeds
-    n_stability = n_budgets
-    n_gating_trace = n_budgets * n_seeds  # approximate
+    print("\n📊 Visualization Categories:")
+    print(f"\n  Per-Budget Plots (in d{{budget}}/ subdirs):")
+    print(f"    • Pareto frontiers - Complexity vs Risk tradeoff")
+    print(f"    • Compression comparison - 3-panel bound decomposition")
+    print(f"    • Bound decompositions - Scatter & stacked visualizations")
+    print(f"    • Gating heatmaps - Per-layer γ values")
+    print(f"    • Gating traces - Per-iteration γ evolution (if learned mode)")
+    print(f"    • Prediction ranks - Model prediction quality (rank 0=top-1)")
+    print(f"    • Magnitude distributions - Effective dimensionality")
+    print(f"    • Sparsity patterns - Active dimension heatmaps")
+    print(f"    • Index stability - Cross-seed consistency")
+    print(f"\n  Cross-Budget Comparisons (in root dir):")
+    print(f"    • Allocation comparison grid - Side-by-side method comparison")
+    print(f"    • Gating trends - γ patterns across all budgets")
+    print(f"\n📋 Summary Tables (in root dir):")
+    print(f"    • summary_table.csv - Complete numerical results")
+    print(f"    • summary_table.tex - LaTeX formatted for papers")
 
-    total_plots = (n_gating_heatmaps + 1 + n_pareto + n_compression + 1 +
-                   n_topk_hist + n_magnitude + n_sparsity + n_stability + n_gating_trace)
-
-    print(f"\n✅ Estimated total: {total_plots}+ plots + 2 tables ready for your paper!")
+    print(f"\n✅ Analysis complete! All visualizations organized by budget + summary tables ready for your paper!")
 
 
 if __name__ == '__main__':

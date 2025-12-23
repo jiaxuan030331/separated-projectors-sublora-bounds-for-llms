@@ -47,6 +47,10 @@ val.bin
 doc_lengths.npy
 eot_indices.npy
 
+analysis_outputs
+analysis_outputs/
+analysis_outputs/*
+
 analysis_outputs_deprec
 analysis_outputs_deprec/
 analysis_outputs_deprec/*
